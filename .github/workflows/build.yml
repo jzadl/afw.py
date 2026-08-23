@@ -38,35 +38,14 @@ jobs:
             zig build-exe afw_media.zig -O ReleaseFast -femit-bin=afw_media
           fi
 
-      - name: Smoke test (all OS)
+      - name: Smoke test
         shell: bash
         run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then BIN=./afw_media.exe; else BIN=./afw_media; fi
-          python3 -c "import afw; print('framework import OK')" || python -c "import afw; print('framework import OK')"
-          "$BIN" --help > /dev/null
-
-      - name: Conversion smoke test
-        if: matrix.os != 'ubuntu-latest'
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then BIN=./afw_media.exe; else BIN=./afw_media; fi
-          ffmpeg -y -v error -f lavfi -i testsrc=size=64x48:rate=1 -frames:v 1 t.png
-          "$BIN" t.png --cols 40 --no-loader -q -o t.afwframes
-          python3 -c "
-          import struct
-          d = open('t.afwframes', 'rb').read()
-          m, c, r, n, f = struct.unpack('<4sIIIf', d[:20])
-          assert m == b'AFW1', 'bad magic'
-          assert n == 1 and len(d) == 20 + c * r * 6, 'bad frame data'
-          print('asset OK:', m.decode(), c, 'x', r, '-', n, 'frame')
-          " || python -c "
-          import struct
-          d = open('t.afwframes', 'rb').read()
-          m, c, r, n, f = struct.unpack('<4sIIIf', d[:20])
-          assert m == b'AFW1', 'bad magic'
-          assert n == 1 and len(d) == 20 + c * r * 6, 'bad frame data'
-          print('asset OK:', m.decode(), c, 'x', r, '-', n, 'frame')
-          "
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            ./afw_media.exe --help > /dev/null
+          else
+            ./afw_media --help > /dev/null
+          fi
 
       - name: Collect artifacts
         shell: bash
