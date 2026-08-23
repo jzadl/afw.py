@@ -1,0 +1,18 @@
+# compiled binaries -- built via CI or `zig build-*`, attached to releases
+afw_media
+afw_media.exe
+libafw_render.so
+libafw_render.dylib
+afw_render.dll
+
+# media assets (large; distribute via releases, not git)
+*.afwframes
+*.partial
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# misc local files
+opencodeplsdontforget.txt
