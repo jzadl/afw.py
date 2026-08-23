@@ -143,7 +143,7 @@ if (Has $py) {
 
 Write-Host "[4/4] python: compile .py files"
 if (Has $py) {
-    & $py -m py_compile afw.py afw_stream_player.py fireworks.py widget_showcase.py
+    & $py -m py_compile afw.py afw_stream_player.py examples/fireworks.py examples/widget_showcase.py
     if ($?) { Write-Host "      -> ok" }
     else    { Write-Host "      -> FAILED"; exit 1 }
 } else {
@@ -153,6 +153,6 @@ if (Has $py) {
 Write-Host ""
 Write-Host "================================"
 Write-Host "  done. test with:"
-Write-Host "    python fireworks.py"
-Write-Host "    python widget_showcase.py"
+Write-Host "    python examples/fireworks.py"
+Write-Host "    python examples/widget_showcase.py"
 Write-Host "================================"

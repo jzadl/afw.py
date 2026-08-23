@@ -14,7 +14,7 @@ afw_media.zig          source for the above
 afw_render.zig         Zig C-ABI shared lib: fast RGB-to-ANSI renderer
 libafw_render.so       compiled Zig renderer
 afw_stream_player.py   real-time streaming video player (uses the Zig lib)
-youtube_terminal.py    example: a picker + player, "YouTube for your terminal"
+examples/              fireworks, widget showcase, and loader-script demos
 ```
 
 ---
@@ -276,22 +276,14 @@ Requires Zig 0.16+ (any recent version works).
 player = StreamPlayer("video.mp4", cols=120, target_fps=60)
 ```
 
-### youtube_terminal.py: a tiny terminal "YouTube"
+### Examples
 
-Scans a folder for videos, shows an arrow-key-navigable picker, plays
-your pick back live, and returns to the picker when it ends. Exactly
-the "select a video, watch it while it's converting" flow:
+`examples/` contains demos and ready-to-run loader scripts:
 
-```bash
-python3 youtube_terminal.py ~/Movies --afw-media ./afw_media --cols 120
-```
-
-Controls: `↑`/`↓` or `j`/`k` to move, `Enter` to play, `q` to stop
-playback (back to picker) or quit the picker.
-
-It's ~100 lines and reads as a template. Swap the local folder scan
-for anything that resolves to a local video path (a downloader, a
-cache directory, whatever) and the picker/player wiring stays the same.
+- `fireworks.py` — sub-pixel firework particles with true color
+- `widget_showcase.py` — all built-in widgets on one screen
+- `example*.py` — auto-generated loaders for bundled `.afwframes`
+  assets (run from the repo root; they expect `afw` on PYTHONPATH)
 
 ---
 

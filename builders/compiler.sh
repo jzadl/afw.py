@@ -162,7 +162,7 @@ else
 fi
 
 echo "[4/4] python: compile .py files"
-if python3 -m py_compile afw.py afw_stream_player.py fireworks.py widget_showcase.py; then
+if python3 -m py_compile afw.py afw_stream_player.py examples/fireworks.py examples/widget_showcase.py; then
     echo "      -> ok"
 else
     echo "      -> FAILED"
@@ -172,6 +172,6 @@ fi
 echo ""
 echo "================================"
 echo "  done. test with:"
-echo "    python3 fireworks.py"
-echo "    python3 widget_showcase.py"
+echo "    python3 examples/fireworks.py"
+echo "    python3 examples/widget_showcase.py"
 echo "================================"
