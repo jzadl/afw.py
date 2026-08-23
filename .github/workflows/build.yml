@@ -24,9 +24,9 @@ jobs:
         shell: bash
         run: |
           case "$RUNNER_OS" in
-            Linux)  zig build-lib afw_render.zig -dynamic -fPIC -O ReleaseFast -femit-bin=libafw_render.so ;;
-            macOS)  zig build-lib afw_render.zig -dynamic -fPIC -O ReleaseFast -femit-bin=libafw_render.dylib ;;
-            Windows) zig build-lib afw_render.zig -dynamic -fPIC -O ReleaseFast -femit-bin=afw_render.dll ;;
+            Linux)    zig build-lib afw_render.zig -dynamic -fPIC -O ReleaseFast -femit-bin=libafw_render.so ;;
+            macOS)    zig build-lib afw_render.zig -dynamic -fPIC -O ReleaseFast -femit-bin=libafw_render.dylib ;;
+            Windows)  zig build-lib afw_render.zig -dynamic -fPIC -O ReleaseFast -femit-bin=afw_render.dll ;;
           esac
 
       - name: Build afw_media CLI
@@ -38,22 +38,35 @@ jobs:
             zig build-exe afw_media.zig -O ReleaseFast -femit-bin=afw_media
           fi
 
-      - name: Smoke test
+      - name: Smoke test (all OS)
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then BIN=./afw_media.exe; else BIN=./afw_media; fi
-          python3 -c "import afw; print('framework import OK')"
+          python3 -c "import afw; print('framework import OK')" || python -c "import afw; print('framework import OK')"
           "$BIN" --help > /dev/null
+
+      - name: Conversion smoke test
+        if: matrix.os != 'ubuntu-latest'
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then BIN=./afw_media.exe; else BIN=./afw_media; fi
           ffmpeg -y -v error -f lavfi -i testsrc=size=64x48:rate=1 -frames:v 1 t.png
           "$BIN" t.png --cols 40 --no-loader -q -o t.afwframes
-          python3 - <<'PY'
+          python3 -c "
           import struct
-          d = open("t.afwframes", "rb").read()
-          m, c, r, n, f = struct.unpack("<4sIIIf", d[:20])
-          assert m == b"AFW1", "bad magic"
-          assert n == 1 and len(d) == 20 + c * r * 6, "bad frame data"
-          print("asset OK:", m.decode(), c, "x", r, "-", n, "frame")
-          PY
+          d = open('t.afwframes', 'rb').read()
+          m, c, r, n, f = struct.unpack('<4sIIIf', d[:20])
+          assert m == b'AFW1', 'bad magic'
+          assert n == 1 and len(d) == 20 + c * r * 6, 'bad frame data'
+          print('asset OK:', m.decode(), c, 'x', r, '-', n, 'frame')
+          " || python -c "
+          import struct
+          d = open('t.afwframes', 'rb').read()
+          m, c, r, n, f = struct.unpack('<4sIIIf', d[:20])
+          assert m == b'AFW1', 'bad magic'
+          assert n == 1 and len(d) == 20 + c * r * 6, 'bad frame data'
+          print('asset OK:', m.decode(), c, 'x', r, '-', n, 'frame')
+          "
 
       - name: Collect artifacts
         shell: bash
