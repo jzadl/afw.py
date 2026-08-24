@@ -52,10 +52,11 @@ jobs:
         shell: bash
         run: python3 builders/bundle.py
 
-      - name: Package
+      - name: Package (release zip only)
         shell: bash
         run: |
           mkdir -p dist/examples
+          # user-facing files only: framework, binaries, player, examples
           cp afw.py dist/
           cp afw_media${{ matrix.ext }} dist/
           cp libafw_render.so dist/ 2>/dev/null || true

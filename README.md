@@ -59,6 +59,8 @@ cd afw && python examples\fireworks.py
 No pip install, no package manager. Just Python 3.10+ and `ffmpeg` on
 PATH for video input.
 
+To build from source instead, see [Build from source](#build-from-source).
+
 ---
 
 ## Build from source
@@ -344,9 +346,9 @@ player = StreamPlayer("video.mp4", cols=120, target_fps=60)
 
 `examples/` contains demos and ready-to-run loader scripts:
 
-- `fireworks.py` — sub-pixel firework particles with true color
-- `widget_showcase.py` — all built-in widgets on one screen
-- `example*.py` — auto-generated loaders for bundled `.afwframes`
+- `fireworks.py` - sub-pixel firework particles with true color
+- `widget_showcase.py` - all built-in widgets on one screen
+- `example*.py` - auto-generated loaders for bundled `.afwframes`
   assets (run from the repo root; they expect `afw` on PYTHONPATH)
 
 ---
