@@ -56,7 +56,11 @@ jobs:
           cp libafw_render.so dist/ 2>/dev/null || true
           cp libafw_render.dylib dist/ 2>/dev/null || true
           cp afw_render.dll dist/ 2>/dev/null || true
-          cd dist && zip -r "../${{ matrix.artifact }}.zip" .
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cd dist && 7z a "../${{ matrix.artifact }}.zip" .
+          else
+            cd dist && zip -r "../${{ matrix.artifact }}.zip" .
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
