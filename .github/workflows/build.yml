@@ -51,11 +51,14 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          mkdir -p dist
+          mkdir -p dist/examples
+          cp afw.py dist/
           cp afw_media${{ matrix.ext }} dist/
           cp libafw_render.so dist/ 2>/dev/null || true
           cp libafw_render.dylib dist/ 2>/dev/null || true
           cp afw_render.dll dist/ 2>/dev/null || true
+          cp afw_stream_player.py dist/
+          cp examples/*.py dist/examples/
           if [ "$RUNNER_OS" = "Windows" ]; then
             cd dist && 7z a "../${{ matrix.artifact }}.zip" .
           else
