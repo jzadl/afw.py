@@ -15,13 +15,13 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: afw-linux-x86_64
+            artifact: afw-linux
             ext: ""
           - os: macos-latest
-            artifact: afw-macos-arm64
+            artifact: afw-macos
             ext: ""
           - os: windows-latest
-            artifact: afw-windows-x86_64
+            artifact: afw-windows
             ext: ".exe"
     runs-on: ${{ matrix.os }}
     steps:
@@ -56,16 +56,12 @@ jobs:
           cp libafw_render.so dist/ 2>/dev/null || true
           cp libafw_render.dylib dist/ 2>/dev/null || true
           cp afw_render.dll dist/ 2>/dev/null || true
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            cd dist && 7z a "../${{ matrix.artifact }}.zip" .
-          else
-            tar czf "${{ matrix.artifact }}.tar.gz" -C dist .
-          fi
+          cd dist && zip -r "../${{ matrix.artifact }}.zip" .
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}.*
+          path: ${{ matrix.artifact }}.zip
 
   release:
     if: github.event_name == 'release'
