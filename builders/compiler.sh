@@ -62,8 +62,6 @@ _install_zig_fallback() {
     echo "  Zig $version installed to /opt/zig"
 }
 
-NEED=()
-
 if ! has zig; then
     echo "[ ] zig: NOT FOUND"
     case "$PM" in
@@ -79,23 +77,6 @@ if ! has zig; then
     esac
 else
     echo "[x] zig: $(zig version)"
-fi
-
-if ! has cargo; then
-    echo "[ ] rust/cargo: NOT FOUND"
-    case "$PM" in
-        pacman) _install_pkgs rust ;;
-        apt|dnf|yum) _install_pkgs rustc cargo ;;
-        apk) _install_pkgs rust cargo ;;
-        brew) _install_pkgs rustup-init ;;
-        *)
-            echo "  Installing via rustup..."
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            source "$HOME/.cargo/env"
-            ;;
-    esac
-else
-    echo "[x] rust/cargo: $(cargo --version)"
 fi
 
 if ! has ffmpeg; then
@@ -135,22 +116,12 @@ else
     exit 1
 fi
 
-echo "[2/4] afw_media binary"
-if [[ -x ./afw_media ]]; then
-    echo "      -> already compiled (pre-built binary)"
-elif [[ -f afw_media_src/Cargo.toml ]]; then
-    cargo build --release --manifest-path afw_media_src/Cargo.toml
-    cp afw_media_src/target/release/afw_media .
-    chmod +x ./afw_media
-    echo "      -> ok"
-elif [[ -f Cargo.toml ]]; then
-    cargo build --release
-    cp target/release/afw_media .
-    chmod +x ./afw_media
+echo "[2/4] zig: afw_media"
+if zig build-exe afw_media.zig -O ReleaseFast -femit-bin=afw_media; then
     echo "      -> ok"
 else
-    echo "      -> WARNING: no pre-built afw_media binary and no Cargo.toml"
-    echo "         video playback will not work without it"
+    echo "      -> FAILED"
+    exit 1
 fi
 
 echo "[3/4] python: unify afw.py"

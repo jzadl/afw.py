@@ -24,7 +24,6 @@ Write-Host "================================"
 $Arch = $env:PROCESSOR_ARCHITECTURE
 if (-not $Arch) { $Arch = "AMD64" }
 $ZigArch = if ($Arch -in @("ARM64","aarch64")) { "aarch64" } else { "x86_64" }
-$RustupArch = if ($Arch -in @("ARM64","aarch64")) { "aarch64" } else { "x86_64" }
 
 if (-not (Has zig)) {
     Write-Host "[ ] zig: NOT FOUND"
@@ -53,21 +52,6 @@ if (-not (Has zig)) {
     }
 } else {
     Write-Host "[x] zig: $(zig version)"
-}
-
-if (-not (Has cargo)) {
-    Write-Host "[ ] rust/cargo: NOT FOUND"
-    if (Has winget) {
-        WingetInstall Rustlang.Rustup
-    } else {
-        Write-Host "  Installing via rustup ($RustupArch)..."
-        Invoke-WebRequest -Uri "https://win.rustup.rs/$RustupArch" -OutFile "$env:TEMP\rustup-init.exe"
-        & "$env:TEMP\rustup-init.exe" -y
-        $env:Path += ";$env:USERPROFILE\.cargo\bin"
-        Remove-Item "$env:TEMP\rustup-init.exe"
-    }
-} else {
-    Write-Host "[x] rust/cargo: $(cargo --version)"
 }
 
 if (-not (Has ffmpeg)) {
@@ -115,20 +99,13 @@ if (Has zig) {
     Write-Host "      -> SKIPPED (zig not found)"
 }
 
-Write-Host "[2/4] afw_media binary"
-if (Test-Path ".\afw_media.exe" -PathType Leaf) {
-    Write-Host "      -> already compiled (pre-built binary)"
-} elseif (Test-Path "afw_media_src\Cargo.toml" -PathType Leaf) {
-    cargo build --release --manifest-path afw_media_src\Cargo.toml
-    Copy-Item "afw_media_src\target\release\afw_media.exe" "."
-    Write-Host "      -> ok"
-} elseif (Test-Path "Cargo.toml" -PathType Leaf) {
-    cargo build --release
-    Copy-Item "target\release\afw_media.exe" "."
-    Write-Host "      -> ok"
+Write-Host "[2/4] zig: afw_media.exe"
+if (Has zig) {
+    zig build-exe afw_media.zig -O ReleaseFast -femit-bin=afw_media.exe
+    if ($?) { Write-Host "      -> ok" }
+    else    { Write-Host "      -> FAILED"; exit 1 }
 } else {
-    Write-Host "      -> WARNING: no pre-built afw_media binary and no Cargo.toml"
-    Write-Host "         video playback will not work without it"
+    Write-Host "      -> SKIPPED (zig not found)"
 }
 
 Write-Host "[3/4] python: unify afw.py"
@@ -143,7 +120,7 @@ if (Has $py) {
 
 Write-Host "[4/4] python: compile .py files"
 if (Has $py) {
-    & $py -m py_compile afw.py afw_stream_player.py examples/fireworks.py examples/widget_showcase.py
+    & $py -m py_compile afw.py afw_stream_player.py examples\fireworks.py examples\widget_showcase.py
     if ($?) { Write-Host "      -> ok" }
     else    { Write-Host "      -> FAILED"; exit 1 }
 } else {
@@ -153,6 +130,6 @@ if (Has $py) {
 Write-Host ""
 Write-Host "================================"
 Write-Host "  done. test with:"
-Write-Host "    python examples/fireworks.py"
-Write-Host "    python examples/widget_showcase.py"
+Write-Host "    python examples\fireworks.py"
+Write-Host "    python examples\widget_showcase.py"
 Write-Host "================================"

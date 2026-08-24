@@ -7,15 +7,97 @@ shared library (`libafw_render.so`) that accelerates fullscreen video
 playback to 1000+ fps. Includes **real-time streaming playback**, so
 you can watch a video while it's still being converted.
 
+---
+
+## Index
+
+- [Install](#install)
+- [Build from source](#build-from-source)
+- [afw.py: the framework](#1-afwpy-the-framework)
+  - [Integrating it into your own programs](#integrating-it-into-your-own-programs)
+  - [Performance](#performance)
+- [afw_media: convert images & videos](#2-afw_media-convert-images--videos)
+  - [File mode](#file-mode)
+  - [.afwframes format](#afwframes-format)
+- [Real-time streaming](#3-real-time-streaming-watch-it-while-it-converts)
+  - [afw_stream_player.py](#afw_stream_playerpy)
+  - [Examples](#examples)
+- [Requirements](#requirements)
+
+---
+
+## Install
+
+Download the zip for your OS from the
+[latest release](https://github.com/jzadl/afw.py/releases). Each zip
+contains everything you need:
+
 ```
-afw.py                 single-file Python framework (zero dependencies)
-afw_media              Zig CLI: image/video -> afw.py assets (compiled binary)
-afw_media.zig          source for the above
-afw_render.zig         Zig C-ABI shared lib: fast RGB-to-ANSI renderer
-libafw_render.so       compiled Zig renderer
-afw_stream_player.py   real-time streaming video player (uses the Zig lib)
-examples/              fireworks, widget showcase, and loader-script demos
+afw.py                 the framework (single file, zero dependencies)
+afw_media              the CLI converter
+libafw_render.so       native renderer (.dylib on macOS, .dll on Windows)
+afw_stream_player.py   streaming video player
+examples/              demos and loader scripts
 ```
+
+Extract and run:
+
+```bash
+# Linux
+unzip afw-linux.zip -d afw
+cd afw && python3 examples/fireworks.py
+
+# macOS
+unzip afw-macos.zip -d afw
+cd afw && python3 examples/fireworks.py
+
+# Windows (PowerShell)
+Expand-Archive afw-windows.zip -DestinationPath afw
+cd afw && python examples\fireworks.py
+```
+
+No pip install, no package manager. Just Python 3.10+ and `ffmpeg` on
+PATH for video input.
+
+---
+
+## Build from source
+
+Requirements:
+
+- Python 3.10+
+- Zig 0.16+
+- `ffmpeg`/`ffprobe` on PATH
+
+### Quick build (all platforms)
+
+```bash
+# Linux / macOS
+bash builders/compiler.sh
+
+# Windows (PowerShell)
+.\builders\compiler.ps1
+```
+
+The compiler script detects your package manager, installs missing
+dependencies, then builds everything: the render library, the CLI,
+the `afw.py` bundle, and syntax-checks all Python files.
+
+### Manual build
+
+```bash
+# 1. render library
+zig build-lib afw_render.zig -dynamic -fPIC -O ReleaseFast -femit-bin=libafw_render.so
+
+# 2. CLI
+zig build-exe afw_media.zig -O ReleaseFast -femit-bin=afw_media
+
+# 3. single-file bundle
+python3 builders/bundle.py
+```
+
+On macOS, replace `libafw_render.so` with `libafw_render.dylib`.
+On Windows, use `afw_render.dll` and `afw_media.exe`.
 
 ---
 
@@ -134,17 +216,7 @@ modes:
   `.py` loader. Good for anything you'll play back more than once.
 - **Streaming mode** (`--stream`): pipes frames to stdout as ffmpeg
   decodes them. Nothing touches disk, nothing is buffered up front.
-  This is what makes real-time playback possible (see §3).
-
-### Build
-
-```bash
-zig build-exe afw_media.zig -O ReleaseFast -femit-bin=afw_media
-```
-
-Requires `ffmpeg`/`ffprobe` on PATH for all input (video and images:
-the CLI shells out to ffmpeg for decoding, so it handles every format
-your ffmpeg supports without bundling any codec code).
+  This is what makes real-time playback possible (see section 3).
 
 ### File mode
 
@@ -210,7 +282,7 @@ source to finish. Measured on a 15s 640x480 clip: **first frame
 available in 0.17s**, while full decode took 3.0s. Playback starts and
 runs live through essentially the entire conversion, not after it.
 
-### `afw_stream_player.py`
+### afw_stream_player.py
 
 A ready-made player: spawns `afw_media --stream`, reads frames off the
 pipe on a background thread (with bounded backpressure so decoding
@@ -256,14 +328,6 @@ Performance (render path only, fullscreen):
 The render path is no longer the bottleneck. Fullscreen 60fps is
 trivial. The actual ceiling is the terminal emulator's ANSI parsing
 speed and ffmpeg's decode rate, both well above 60fps.
-
-Build the Zig renderer:
-
-```bash
-zig build-lib afw_render.zig -dynamic -fPIC -O ReleaseFast -femit-bin=libafw_render.so
-```
-
-Requires Zig 0.16+ (any recent version works).
 
 #### Automatic fps detection
 

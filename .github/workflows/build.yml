@@ -48,6 +48,10 @@ jobs:
         shell: bash
         run: ./afw_media${{ matrix.ext }} --help > /dev/null
 
+      - name: Generate afw.py bundle
+        shell: bash
+        run: python3 builders/bundle.py
+
       - name: Package
         shell: bash
         run: |
