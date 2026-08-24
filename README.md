@@ -56,9 +56,6 @@ Expand-Archive afw-windows.zip -DestinationPath afw
 cd afw && python examples\fireworks.py
 ```
 
-No pip install, no package manager. Just Python 3.10+ and `ffmpeg` on
-PATH for video input.
-
 To build from source instead, see [Build from source](#build-from-source).
 
 ---
