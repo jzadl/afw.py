@@ -9,6 +9,8 @@
 //! fallback, so still images also route through ffmpeg, which handles
 //! png/jpg/gif/bmp/webp natively.
 //!
+//! Rust version will not be released 
+//!
 //! Build:
 //!     zig build-exe afw_media.zig -O ReleaseFast -femit-bin=afw_media
 //!
