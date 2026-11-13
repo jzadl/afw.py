@@ -23,10 +23,17 @@ _BRACKETED_PASTE_OFF = "\x1b[?2004l"
 
 
 class TerminalError(Exception):
-    pass
+    """Raised when the terminal can't be used: stdout is not a tty, or
+    raw mode / size queries fail."""
 
 
 class Terminal:
+    """Owns the terminal for one App run: raw mode, alt screen, hidden
+    cursor, optional mouse/bracketed-paste, resize (SIGWINCH) handling,
+    and guaranteed restore (atexit + SIGINT/SIGTERM/SIGHUP) so a crash
+    never leaves the user's terminal broken. Use as a context manager.
+    """
+
     def __init__(
         self,
         *,

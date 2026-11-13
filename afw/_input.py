@@ -9,6 +9,10 @@ from typing import Literal, Optional, Union
 
 
 class Key(Enum):
+    """Special keys InputManager can report (arrows, function keys,
+    editing keys, and Ctrl-C). Printable characters arrive as KeyEvent
+    with key=None and char set instead."""
+
     UP = auto(); DOWN = auto(); LEFT = auto(); RIGHT = auto()
     ENTER = auto(); ESCAPE = auto(); TAB = auto(); BACKSPACE = auto()
     DELETE = auto(); HOME = auto(); END = auto(); PAGE_UP = auto(); PAGE_DOWN = auto()
@@ -48,6 +52,10 @@ _MAX_SEQ_LEN = max(len(s) for s in _ESCAPE_SEQUENCES)
 
 @dataclass(frozen=True, slots=True)
 class KeyEvent:
+    """One key press: either a special Key, a printable char, or both
+    (e.g. Ctrl-C sets key=CTRL_C, ctrl=True; a letter sets char).
+    Use is_char("q") to match a plain character."""
+
     key: Optional[Key]
     char: Optional[str]
     ctrl: bool = False
@@ -59,6 +67,10 @@ class KeyEvent:
 
 @dataclass(frozen=True, slots=True)
 class MouseEvent:
+    """One mouse report (SGR 1006 encoding): 0-based cell coordinates,
+    which button, and whether it is pressed. Motion events arrive with
+    button="move"; wheel events with button="wheel_up"/"wheel_down"."""
+
     x: int
     y: int
     button: Literal["left", "middle", "right", "release", "wheel_up", "wheel_down", "move"]
@@ -69,9 +81,15 @@ _SGR_MOUSE_RE = re.compile(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])")
 
 
 class InputManager:
+    """Non-blocking terminal input: reads whatever bytes are available
+    on fd, decodes UTF-8 (a multi-byte character split across two reads
+    is reassembled via _pending_bytes), and turns escape sequences into
+    KeyEvent/MouseEvent objects. poll() never blocks."""
+
     def __init__(self, fd: int):
         self._fd = fd
         self._buf = ""
+        self._pending_bytes = b""
 
     def _read_available(self, timeout: float = 0.0) -> str:
         chunks = []
@@ -87,7 +105,11 @@ class InputManager:
             pass
         if not chunks:
             return ""
-        raw = b"".join(chunks)
+        # A multi-byte UTF-8 character may have been split across two
+        # reads; prepend the tail saved by the previous call so the
+        # character decodes whole instead of losing bytes.
+        raw = self._pending_bytes + b"".join(chunks)
+        self._pending_bytes = b""
         try:
             return raw.decode("utf-8")
         except UnicodeDecodeError:

@@ -40,7 +40,7 @@ fn changed6(rgb: [*]const u8, pv: [*]const u8, i: usize) bool {
         rgb[i + 3] != pv[i + 3] or rgb[i + 4] != pv[i + 4] or rgb[i + 5] != pv[i + 5];
 }
 
-export fn afw_render_frame(
+fn renderImpl(
     rgb: [*]const u8,
     prev: ?[*]const u8,
     cols: c_int,
@@ -147,4 +147,63 @@ export fn afw_render_frame(
         }
     }
     return @min(pos, out_cap);
+}
+
+export fn afw_render_frame(
+    rgb: [*]const u8,
+    prev: ?[*]const u8,
+    cols: c_int,
+    rows: c_int,
+    out: [*]u8,
+    out_cap: usize,
+) usize {
+    return renderImpl(rgb, prev, cols, rows, out, out_cap);
+}
+
+// ---------------------------------------------------------------------------
+// Fast path: the caller passes only the current frame; the previous
+// frame lives in this module (one active video stream per process —
+// the render loop is single-threaded, and the Python side forces a
+// full render whenever the screen could have diverged from the stored
+// frame: first frame, resize, or a pure-Python render in between).
+// This removes the per-frame copy of the whole RGB buffer on the
+// Python side (the caller passes a zero-copy view of the canvas
+// bytearray); the stored frame is updated with one memcpy here, into
+// a preallocated buffer, so nothing is allocated per frame.
+// ---------------------------------------------------------------------------
+
+var g_prev: []u8 = &.{};
+var g_prev_cols: usize = 0;
+var g_prev_rows: usize = 0;
+
+export fn afw_render_frame_fast(
+    rgb: [*]const u8,
+    cols: c_int,
+    rows: c_int,
+    out: [*]u8,
+    out_cap: usize,
+    force_full: bool,
+) usize {
+    if (cols <= 0 or rows <= 0) return 0;
+    const c: usize = @intCast(cols);
+    const r: usize = @intCast(rows);
+    const needed = c * r * 6;
+    if (needed != g_prev.len or c != g_prev_cols or r != g_prev_rows) {
+        if (g_prev.len > 0) std.heap.page_allocator.free(g_prev);
+        g_prev = std.heap.page_allocator.alloc(u8, needed) catch {
+            // Allocation failed: still render the frame in full, just
+            // without remembering it for the next call.
+            return renderImpl(rgb, null, cols, rows, out, out_cap);
+        };
+        @memset(g_prev, 0);
+        g_prev_cols = c;
+        g_prev_rows = r;
+        const written = renderImpl(rgb, null, cols, rows, out, out_cap);
+        @memcpy(g_prev, rgb[0..needed]);
+        return written;
+    }
+    const prev_ptr: ?[*]const u8 = if (force_full) null else g_prev.ptr;
+    const written = renderImpl(rgb, prev_ptr, cols, rows, out, out_cap);
+    @memcpy(g_prev, rgb[0..needed]);
+    return written;
 }

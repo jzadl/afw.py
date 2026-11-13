@@ -45,8 +45,14 @@ def _compute_char_width(ch: str) -> int:
     return 1
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class Cell:
+    """One grid position: a character plus its Style. Immutable by
+    design — drawing always *replaces* a slot via Buffer.set(), never
+    mutates a Cell in place, so Buffer.clear() can safely fill the
+    whole grid with one shared instance instead of allocating
+    width*height copies."""
+
     ch: str = " "
     style: Style = DEFAULT_STYLE
 
@@ -59,6 +65,13 @@ WIDE_TAIL = Cell("\x00", DEFAULT_STYLE)
 
 
 class Buffer:
+    """The text layer: a width*height grid of Cells, row-major.
+
+    get()/set() address cells by (x, y); clear() fills the grid with a
+    single shared Cell instance (cells are immutable, so sharing is
+    safe); resize() preserves the overlapping region.
+    """
+
     __slots__ = ("width", "height", "cells")
 
     def __init__(self, width: int, height: int):
@@ -83,10 +96,9 @@ class Buffer:
         self.cells[self.idx(x, y)] = cell
 
     def clear(self, cell: Cell = EMPTY_CELL) -> None:
-        # Cells are treated as immutable value objects everywhere in the
-        # framework (drawing always *replaces* a slot via set(), never
-        # mutates one in place), so every cell can share a single
-        # instance instead of allocating width*height copies per clear.
+        # Cells are immutable value objects (see Cell), so every slot
+        # can share a single instance instead of allocating
+        # width*height copies per clear.
         if cell is EMPTY_CELL or (cell.ch == " " and cell.style is DEFAULT_STYLE):
             shared = EMPTY_CELL
         else:

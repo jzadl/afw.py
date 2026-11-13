@@ -114,6 +114,11 @@ class NullTerminal:
         pass
 
 
+# Seed here, at import time, not in main(): ART is built at import and
+# main()'s seed comes too late, so the sprite benchmark was not
+# reproducible across runs.
+random.seed(1337)
+
 ART = "\n".join(
     "".join(random.choice("abcdeABCDE12345@#$%*+=~") for _ in range(40))
     for _ in range(20)
@@ -364,6 +369,8 @@ def suite_renderer(results):
                          render_native, note_fn=fps_note))
 
     # informational: bytes emitted per realistic diffed frame
+    # (encode-only: NullTerminal discards the bytes, so the terminal
+    # emulator's ANSI parsing cost is not in this number).
     vi2 = 0
     total = 0
     for _ in range(30):
@@ -372,7 +379,7 @@ def suite_renderer(results):
                                  COLS, ROWS, out, out_cap)
         total += n
     results.append(_Result(g, "ZIG bytes emitted / video frame (diffed)",
-                           total / 30, "B/s", note=f"vs {CELLS * 6} B raw RGB"))
+                           total / 30, "B/frame", note=f"vs {CELLS * 6} B raw RGB"))
 
 
 def suite_scene_anim(results):
@@ -466,11 +473,14 @@ def suite_full_frame(results):
                              Style(fg=Colors.GRAY)))
     scene.add(TextWidget("q quit | space pause", 2, ROWS - 2, Style(fg=Colors.YELLOW)))
 
+    ui_canvas = Canvas(COLS, ROWS)
+
     def ui_frame_python():
-        c = Canvas(COLS, ROWS)
-        c.clear()
-        scene.draw(c)
-        rp.render(c)
+        # Reuse one canvas like a real app does: allocating a fresh
+        # Canvas per iteration measured allocation, not app frame rate.
+        ui_canvas.clear()
+        scene.draw(ui_canvas)
+        rp.render(ui_canvas)
 
     results.append(bench(g, "UI app frame END-TO-END (pure Python)",
                          ui_frame_python, unit="frames/s", note_fn=fps_note))
@@ -483,6 +493,8 @@ def suite_full_frame(results):
         cv = Canvas(COLS, ROWS)
         fi = [0]
 
+        # encode-only: NullTerminal discards the rendered bytes, so the
+        # terminal emulator's ANSI parsing cost is not in this number.
         def video_frame_native():
             cv.clear()
             cv.blit_rgb(video[fi[0] % 30])
@@ -527,7 +539,9 @@ def main():
         print(f"{r.name:<{name_w}} {r.rate:>14,.0f} {ns:>12}   {r.note}")
 
     print("\nnotes: 'fps' = full-frame equivalents per second; "
-          "gc disabled during timing; median of 5 runs")
+          "gc disabled during timing; median of 5 runs; "
+          "video frame numbers are encode-only (NullTerminal discards "
+          "the bytes, so terminal write/parse cost is not measured)")
 
 
 if __name__ == "__main__":

@@ -17,6 +17,10 @@ def _interpolate_value(a: Any, b: Any, t: float) -> Any:
 
 
 class Easing:
+    """Static easing functions: each maps a linear 0..1 progress value
+    to an eased 0..1 value (e.g. ease_in_quad starts slow, ease_out_bounce
+    overshoots at the end). Pass one as the easing= argument of Tween."""
+
     @staticmethod
     def linear(t: float) -> float:
         return t
@@ -99,6 +103,17 @@ EasingFn = Callable[[float], float]
 
 
 class Tween:
+    """Animates one attribute of a target object from its current value
+    to end_value over duration seconds.
+
+    loops counts individual passes, not full cycles: loops=2 with
+    yoyo=True runs one out-and-back (a forward pass, then a reverse
+    pass) and then finishes. loops=-1 loops forever. retarget()
+    restarts the tween from the attribute's current value and resets
+    the loop and delay state, so a retargeted tween always runs its
+    full loop count again.
+    """
+
     def __init__(
         self,
         target: Any,
@@ -138,6 +153,8 @@ class Tween:
         if duration is not None:
             self.duration = max(0.0, duration)
         self._elapsed = 0.0
+        self._delay_elapsed = 0.0
+        self._loop_count = 0
         self.finished = False
         self._forward = True
 
@@ -200,10 +217,16 @@ class Tween:
 
 
 class _DummyTarget:
+    """Stand-in tween target: a bare object with one numeric attribute,
+    for tests and for callbacks that need something to animate."""
+
     v: float = 0.0
 
 
 class AnimationManager:
+    """Owns the active tweens for a scene: add()/animate() to start one,
+    update(dt) advances them all and drops the finished ones."""
+
     def __init__(self):
         self._tweens: list[Tween] = []
 
@@ -237,6 +260,13 @@ class AnimationManager:
 
 
 class Ticker:
+    """Calls fn on a fixed interval, driven by App._run_tickers(dt).
+
+    An interval of 0 (or negative) means "once per frame", not "as
+    fast as possible": _tick calls fn exactly once per call and resets
+    the accumulator, so a zero interval can never hang the app.
+    """
+
     def __init__(self, interval: float, fn: Callable[[], None]):
         self.interval = max(0.0, interval)
         self.fn = fn
@@ -245,6 +275,15 @@ class Ticker:
 
     def _tick(self, dt: float) -> None:
         if self._cancelled:
+            return
+        if self.interval <= 0:
+            # "Once per frame": a zero interval used to spin forever in
+            # the while loop below (acc >= 0 is always true).
+            self._acc = 0.0
+            try:
+                self.fn()
+            except Exception:
+                pass
             return
         self._acc += dt
         while self._acc >= self.interval and not self._cancelled:

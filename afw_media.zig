@@ -104,7 +104,7 @@ fn defaultOutput(alloc: std.mem.Allocator, input: []const u8) ![]const u8 {
     return std.fmt.allocPrint(alloc, "{s}.afwframes", .{stem});
 }
 
-const image_extensions = [_][]const u8{ "png", "jpg", "jpeg", "gif", "bmp", "webp" };
+const image_extensions = [_][]const u8{ "png", "jpg", "jpeg", "gif", "bmp", "webp", "tiff", "avif", "jxl", "svg" };
 
 fn isImagePath(path: []const u8) bool {
     const ext = std.fs.path.extension(path);
@@ -682,6 +682,11 @@ fn writeLoaderScript(
         \\        self.close()
         \\
         \\    def read_frame(self, index: int) -> bytes:
+        \\        """Returns the raw cell bytes for `index`, clamped into
+        \\        range so a caller looping slightly past the end
+        \\        (off-by-one, or a video whose reported frame count was
+        \\        approximate) degrades to repeating the last frame
+        \\        instead of raising."""
         \\        if self.frame_count == 0:
         \\            raise ValueError("asset has zero frames")
         \\        index = max(0, min(index, self.frame_count - 1))
@@ -751,8 +756,8 @@ fn writeLoaderScript(
         \\        def update(dt):
         \\            if is_video:
         \\                state["index"] = (state["index"] + 1) % frames.frame_count
-        \\            else:
-        \\                app.stop() if app.frame_count > 1 else None
+        \\            elif app.frame_count > 1:
+        \\                app.stop()
         \\
         \\        @app.on_render
         \\        def render(canvas):
@@ -992,7 +997,7 @@ fn convertVideoSequential(ctx: *Context, probed: ProbeResult) !void {
     ctx.cwd.deleteFile(ctx.io, tmp_path) catch {};
 
     if (!ctx.args.quiet) {
-        eprint(ctx.io, "converted {s} -> {s} ({d} frames, {d}x{d} cells, {d:.2} fps)\n", .{ ctx.args.input, ctx.args.output, frame_count, ctx.args.cols, rows, probed.fps });
+        eprint(ctx.io, "converted {s} -> {s} ({d} frames, {d}x{d} cells, {d:.2} fps)\n", .{ ctx.args.input, ctx.args.output, frame_count, ctx.args.cols, rows, effective_fps });
     }
 
     extractAudioIfPresent(ctx.gpa, ctx.io, ctx.cwd, ctx.args.input, ctx.args.output, ctx.args.quiet);
@@ -1146,6 +1151,8 @@ fn convertVideoParallel(ctx: *Context, probed: ProbeResult, duration: f64) !void
 
     try writeAsset(ctx, all_frames.items, ctx.args.cols, rows, effective_fps);
 
+    extractAudioIfPresent(ctx.gpa, ctx.io, ctx.cwd, ctx.args.input, ctx.args.output, ctx.args.quiet);
+
     if (!ctx.args.quiet) {
         eprint(ctx.io, "converted {s} -> {s} ({d} frames, {d}x{d} cells, {d:.2} fps, {d} jobs)\n", .{ ctx.args.input, ctx.args.output, all_frames.items.len, ctx.args.cols, rows, effective_fps, segment_count });
     }
@@ -1158,8 +1165,16 @@ fn convertVideoParallel(ctx: *Context, probed: ProbeResult, duration: f64) !void
 fn streamVideo(ctx: *Context, probed: ProbeResult) !void {
     const rows = ctx.args.rows orelse deriveRows(ctx.args.cols, probed.width, probed.height);
 
+    // The header and the log must report the rate frames actually
+    // arrive at, not the probed source rate: --fps caps the ffmpeg
+    // filter, so with --fps 12 on a 30fps source the stream is 12fps.
+    var effective_fps = probed.fps;
+    if (ctx.args.max_fps) |cap| {
+        if (cap > 0 and cap < effective_fps) effective_fps = cap;
+    }
+
     if (!ctx.args.quiet) {
-        eprint(ctx.io, "streaming {s} ({d}x{d} source -> {d}x{d} cells, {d:.2} fps) ...\n", .{ ctx.args.input, probed.width, probed.height, ctx.args.cols, rows, probed.fps });
+        eprint(ctx.io, "streaming {s} ({d}x{d} source -> {d}x{d} cells, {d:.2} fps) ...\n", .{ ctx.args.input, probed.width, probed.height, ctx.args.cols, rows, effective_fps });
     }
 
     var source = try VideoSource.spawnSource(ctx.gpa, ctx.io, ctx.args.input, probed, .{ .max_fps = ctx.args.max_fps });
@@ -1169,7 +1184,7 @@ fn streamVideo(ctx: *Context, probed: ProbeResult) !void {
     var out = Io.File.stdout().writer(ctx.io, &out_buf);
 
     // frame_count = 0 signals "unbounded live stream" to readers.
-    try writeHeader(&out.interface, ctx.args.cols, rows, 0, probed.fps);
+    try writeHeader(&out.interface, ctx.args.cols, rows, 0, effective_fps);
     try out.interface.flush(); // readers may block on the header alone
 
     const cells_len = @as(usize, ctx.args.cols) * rows * 6;

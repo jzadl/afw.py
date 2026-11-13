@@ -106,8 +106,8 @@ def main() -> None:
         def update(dt):
             if is_video:
                 state["index"] = (state["index"] + 1) % frames.frame_count
-            else:
-                app.stop() if app.frame_count > 1 else None
+            elif app.frame_count > 1:
+                app.stop()
 
         @app.on_render
         def render(canvas):

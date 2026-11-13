@@ -54,6 +54,11 @@ def _quantize(r: int, g: int, b: int) -> int:
 
 @dataclass(frozen=True, slots=True)
 class Color:
+    """An RGB color (channels clamped to 0..255). Build with Color(r, g,
+    b) or Color.hex("#rrggbb"); lerp() blends toward another color and
+    with_alpha_over() composites over a background. to_ansi_fg/bg emit
+    truecolor sequences, or the nearest 256-color index in old() mode."""
+
     r: int
     g: int
     b: int
@@ -95,6 +100,9 @@ class Color:
 
 
 class Colors:
+    """Named palette (Solarized-inspired) plus TRANSPARENT=None, which
+    Sprite.from_text treats as "leave this cell alone"."""
+
     BLACK = Color(0, 0, 0)
     WHITE = Color(255, 255, 255)
     RED = Color(220, 50, 47)

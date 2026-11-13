@@ -1,16 +1,17 @@
 from __future__ import annotations
 
+# Keep in sync with afw/__init__.py.
+__version__ = "0.1.0-dev"
+
 import atexit
 import ctypes
 import io
 import math
 import os
-import random
 import re
 import select
 import shutil
 import signal
-import struct
 import subprocess
 import sys
 import termios
@@ -26,6 +27,10 @@ from typing import Any, Callable, Literal, Optional, Union
 
 
 class _CompatState:
+    """Global old-terminal fallback state: truecolor (default True)
+    and force_ascii (default False). Changed by old()/modern(); read by
+    Color (256-color quantization) and Canvas (ASCII box chars)."""
+
     truecolor: bool = True
     force_ascii: bool = False
 
@@ -59,6 +64,9 @@ else:
 
 
 def _load_native_render_lib():
+    """Load libafw_render (ctypes CDLL) once, or None if it is not
+    built/installed. Searches next to the project root (package layout)
+    or next to the single-file bundle, then the system library path."""
     global _native_render_lib, _native_render_tried
     if _native_render_tried:
         return _native_render_lib
@@ -94,6 +102,34 @@ def _load_native_render_lib():
     except Exception:
         _native_render_lib = None
     return _native_render_lib
+
+
+def _load_native_render_fast():
+    """Return the afw_render_frame_fast entry point if the loaded lib
+    provides it, else None.
+
+    The fast entry point keeps its own previous-frame buffer inside
+    the .so, so callers pass only the current frame (as a zero-copy
+    view of the canvas RGB bytearray) plus a force_full flag — no
+    per-frame copy of the RGB buffer on the Python side. Libraries
+    built before this entry point existed simply lack it, and the
+    caller falls back to afw_render_frame.
+    """
+    lib = _load_native_render_lib()
+    if lib is None:
+        return None
+    try:
+        fn = lib.afw_render_frame_fast
+    except AttributeError:
+        return None
+    fn.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_int, ctypes.c_int,
+        ctypes.POINTER(ctypes.c_char), ctypes.c_size_t,
+        ctypes.c_bool,
+    ]
+    fn.restype = ctypes.c_size_t
+    return fn
 
 
 def native_render_available() -> bool:
@@ -149,6 +185,11 @@ def _quantize(r: int, g: int, b: int) -> int:
 
 @dataclass(frozen=True, slots=True)
 class Color:
+    """An RGB color (channels clamped to 0..255). Build with Color(r, g,
+    b) or Color.hex("#rrggbb"); lerp() blends toward another color and
+    with_alpha_over() composites over a background. to_ansi_fg/bg emit
+    truecolor sequences, or the nearest 256-color index in old() mode."""
+
     r: int
     g: int
     b: int
@@ -190,6 +231,9 @@ class Color:
 
 
 class Colors:
+    """Named palette (Solarized-inspired) plus TRANSPARENT=None, which
+    Sprite.from_text treats as "leave this cell alone"."""
+
     BLACK = Color(0, 0, 0)
     WHITE = Color(255, 255, 255)
     RED = Color(220, 50, 47)
@@ -205,6 +249,12 @@ class Colors:
 
 @dataclass(frozen=True, slots=True)
 class Style:
+    """How one cell looks: optional truecolor fg/bg plus bold, dim,
+    italic, underline, blink, reverse, strikethrough. Immutable and
+    hashable; merged() overlays another style on top of this one
+    (only its set fields win); to_ansi_seq() renders the SGR sequence
+    (truecolor 38;2/48;2, or 256-color 38;5/48;5 in old() mode)."""
+
     fg: Optional[Color] = None
     bg: Optional[Color] = None
     bold: bool = False
@@ -292,8 +342,14 @@ def _compute_char_width(ch: str) -> int:
     return 1
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class Cell:
+    """One grid position: a character plus its Style. Immutable by
+    design — drawing always *replaces* a slot via Buffer.set(), never
+    mutates a Cell in place, so Buffer.clear() can safely fill the
+    whole grid with one shared instance instead of allocating
+    width*height copies."""
+
     ch: str = " "
     style: Style = DEFAULT_STYLE
 
@@ -306,6 +362,13 @@ WIDE_TAIL = Cell("\x00", DEFAULT_STYLE)
 
 
 class Buffer:
+    """The text layer: a width*height grid of Cells, row-major.
+
+    get()/set() address cells by (x, y); clear() fills the grid with a
+    single shared Cell instance (cells are immutable, so sharing is
+    safe); resize() preserves the overlapping region.
+    """
+
     __slots__ = ("width", "height", "cells")
 
     def __init__(self, width: int, height: int):
@@ -330,10 +393,9 @@ class Buffer:
         self.cells[self.idx(x, y)] = cell
 
     def clear(self, cell: Cell = EMPTY_CELL) -> None:
-        # Cells are treated as immutable value objects everywhere in the
-        # framework (drawing always *replaces* a slot via set(), never
-        # mutates one in place), so every cell can share a single
-        # instance instead of allocating width*height copies per clear.
+        # Cells are immutable value objects (see Cell), so every slot
+        # can share a single instance instead of allocating
+        # width*height copies per clear.
         if cell is EMPTY_CELL or (cell.ch == " " and cell.style is DEFAULT_STYLE):
             shared = EMPTY_CELL
         else:
@@ -363,10 +425,17 @@ _BRACKETED_PASTE_OFF = "\x1b[?2004l"
 
 
 class TerminalError(Exception):
-    pass
+    """Raised when the terminal can't be used: stdout is not a tty, or
+    raw mode / size queries fail."""
 
 
 class Terminal:
+    """Owns the terminal for one App run: raw mode, alt screen, hidden
+    cursor, optional mouse/bracketed-paste, resize (SIGWINCH) handling,
+    and guaranteed restore (atexit + SIGINT/SIGTERM/SIGHUP) so a crash
+    never leaves the user's terminal broken. Use as a context manager.
+    """
+
     def __init__(
         self,
         *,
@@ -505,6 +574,10 @@ class Terminal:
 
 
 class Key(Enum):
+    """Special keys InputManager can report (arrows, function keys,
+    editing keys, and Ctrl-C). Printable characters arrive as KeyEvent
+    with key=None and char set instead."""
+
     UP = auto(); DOWN = auto(); LEFT = auto(); RIGHT = auto()
     ENTER = auto(); ESCAPE = auto(); TAB = auto(); BACKSPACE = auto()
     DELETE = auto(); HOME = auto(); END = auto(); PAGE_UP = auto(); PAGE_DOWN = auto()
@@ -544,6 +617,10 @@ _MAX_SEQ_LEN = max(len(s) for s in _ESCAPE_SEQUENCES)
 
 @dataclass(frozen=True, slots=True)
 class KeyEvent:
+    """One key press: either a special Key, a printable char, or both
+    (e.g. Ctrl-C sets key=CTRL_C, ctrl=True; a letter sets char).
+    Use is_char("q") to match a plain character."""
+
     key: Optional[Key]
     char: Optional[str]
     ctrl: bool = False
@@ -555,6 +632,10 @@ class KeyEvent:
 
 @dataclass(frozen=True, slots=True)
 class MouseEvent:
+    """One mouse report (SGR 1006 encoding): 0-based cell coordinates,
+    which button, and whether it is pressed. Motion events arrive with
+    button="move"; wheel events with button="wheel_up"/"wheel_down"."""
+
     x: int
     y: int
     button: Literal["left", "middle", "right", "release", "wheel_up", "wheel_down", "move"]
@@ -565,9 +646,15 @@ _SGR_MOUSE_RE = re.compile(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])")
 
 
 class InputManager:
+    """Non-blocking terminal input: reads whatever bytes are available
+    on fd, decodes UTF-8 (a multi-byte character split across two reads
+    is reassembled via _pending_bytes), and turns escape sequences into
+    KeyEvent/MouseEvent objects. poll() never blocks."""
+
     def __init__(self, fd: int):
         self._fd = fd
         self._buf = ""
+        self._pending_bytes = b""
 
     def _read_available(self, timeout: float = 0.0) -> str:
         chunks = []
@@ -583,7 +670,11 @@ class InputManager:
             pass
         if not chunks:
             return ""
-        raw = b"".join(chunks)
+        # A multi-byte UTF-8 character may have been split across two
+        # reads; prepend the tail saved by the previous call so the
+        # character decodes whole instead of losing bytes.
+        raw = self._pending_bytes + b"".join(chunks)
+        self._pending_bytes = b""
         try:
             return raw.decode("utf-8")
         except UnicodeDecodeError:
@@ -686,6 +777,12 @@ class InputManager:
 
 
 class Sprite:
+    """Reusable ASCII/unicode art: a sparse grid of (char, style)
+    cells. Build with Sprite.from_text() (leading/trailing blank lines
+    trimmed, spaces transparent, optional per-character palette), draw
+    with Canvas.blit() or SpriteWidget. Sprites are positionless; the
+    caller supplies x/y at draw time."""
+
     def __init__(self, width: int, height: int):
         self.width = width
         self.height = height
@@ -747,6 +844,10 @@ def _interpolate_value(a: Any, b: Any, t: float) -> Any:
 
 
 class Easing:
+    """Static easing functions: each maps a linear 0..1 progress value
+    to an eased 0..1 value (e.g. ease_in_quad starts slow, ease_out_bounce
+    overshoots at the end). Pass one as the easing= argument of Tween."""
+
     @staticmethod
     def linear(t: float) -> float:
         return t
@@ -829,6 +930,17 @@ EasingFn = Callable[[float], float]
 
 
 class Tween:
+    """Animates one attribute of a target object from its current value
+    to end_value over duration seconds.
+
+    loops counts individual passes, not full cycles: loops=2 with
+    yoyo=True runs one out-and-back (a forward pass, then a reverse
+    pass) and then finishes. loops=-1 loops forever. retarget()
+    restarts the tween from the attribute's current value and resets
+    the loop and delay state, so a retargeted tween always runs its
+    full loop count again.
+    """
+
     def __init__(
         self,
         target: Any,
@@ -868,6 +980,8 @@ class Tween:
         if duration is not None:
             self.duration = max(0.0, duration)
         self._elapsed = 0.0
+        self._delay_elapsed = 0.0
+        self._loop_count = 0
         self.finished = False
         self._forward = True
 
@@ -930,10 +1044,16 @@ class Tween:
 
 
 class _DummyTarget:
+    """Stand-in tween target: a bare object with one numeric attribute,
+    for tests and for callbacks that need something to animate."""
+
     v: float = 0.0
 
 
 class AnimationManager:
+    """Owns the active tweens for a scene: add()/animate() to start one,
+    update(dt) advances them all and drops the finished ones."""
+
     def __init__(self):
         self._tweens: list[Tween] = []
 
@@ -967,6 +1087,13 @@ class AnimationManager:
 
 
 class Ticker:
+    """Calls fn on a fixed interval, driven by App._run_tickers(dt).
+
+    An interval of 0 (or negative) means "once per frame", not "as
+    fast as possible": _tick calls fn exactly once per call and resets
+    the accumulator, so a zero interval can never hang the app.
+    """
+
     def __init__(self, interval: float, fn: Callable[[], None]):
         self.interval = max(0.0, interval)
         self.fn = fn
@@ -975,6 +1102,15 @@ class Ticker:
 
     def _tick(self, dt: float) -> None:
         if self._cancelled:
+            return
+        if self.interval <= 0:
+            # "Once per frame": a zero interval used to spin forever in
+            # the while loop below (acc >= 0 is always true).
+            self._acc = 0.0
+            try:
+                self.fn()
+            except Exception:
+                pass
             return
         self._acc += dt
         while self._acc >= self.interval and not self._cancelled:
@@ -1005,6 +1141,16 @@ def _box_chars() -> dict[str, str]:
 
 
 class Canvas:
+    """A drawable grid of text cells plus a per-cell RGB layer.
+
+    The text layer holds one Cell per grid position (written by put /
+    draw_* / blit). The RGB layer holds 6 bytes per cell (top RGB +
+    bottom RGB) and is written by put_subpixel / blit_subpixel_frame;
+    the renderer turns it into half-block glyphs, natively when
+    libafw_render is present and through the pure-Python ANSI builder
+    otherwise.
+    """
+
     def __init__(self, buffer_or_width: Union[Buffer, int], height: Optional[int] = None):
         if isinstance(buffer_or_width, Buffer):
             self._buffer = buffer_or_width
@@ -1080,11 +1226,11 @@ class Canvas:
     def get_rgb_bytes(self) -> bytes:
         return bytes(self._rgb)
 
-    def buffer_has_content(self) -> bool:
-        for c in self._buffer.cells:
-            if c.ch != " " or (c.style.bg is not None and c.style.bg != Color(0, 0, 0)):
-                return True
-        return False
+    def get_rgb_view(self) -> bytearray:
+        """Zero-copy view of the internal RGB layer (6 bytes per cell:
+        top RGB, bottom RGB). Intended for the native renderer only;
+        callers must not mutate it. Use get_rgb_bytes() for a snapshot."""
+        return self._rgb
 
     def put(self, x: int, y: int, ch: str, style: Style = DEFAULT_STYLE) -> None:
         if not (0 <= x < self.width and 0 <= y < self.height):
@@ -1144,9 +1290,9 @@ class Canvas:
         else:
             if is_top:
                 fg = color
-                bg = cell.style.bg
+                bg = cell.style.bg or Color(0, 0, 0)
             else:
-                fg = cell.style.fg
+                fg = cell.style.fg or Color(0, 0, 0)
                 bg = color
 
         if fg is not None and bg is not None and fg == bg:
@@ -1155,13 +1301,39 @@ class Canvas:
             self._buffer.set(cx, cy, Cell("\u2580", Style(fg=fg, bg=bg)))
 
     def flush_subpixels(self) -> None:
-        pass
+        """Merge the RGB layer into the text buffer.
+
+        Every cell whose text content is blank or already a half/full
+        block becomes a '▀' cell with fg/bg taken from the RGB layer,
+        so the frame also renders correctly through the pure-Python
+        path (which reads the text buffer). Cells holding real text
+        are left alone, and all-black RGB cells stay blank. A no-op
+        when the canvas has no RGB data.
+        """
+        if not self._has_rgb:
+            return
+        rgb = self._rgb
+        width = self.width
+        for i, cell in enumerate(self._buffer.cells):
+            if cell.ch not in (" ", "\u2580", "\u2588"):
+                continue
+            base = i * 6
+            tr, tg, tb, br, bg, bb = rgb[base:base + 6]
+            if tr == tg == tb == br == bg == bb == 0:
+                continue
+            self._buffer.set(
+                i % width, i // width,
+                Cell("\u2580", Style(fg=Color(tr, tg, tb), bg=Color(br, bg, bb))),
+            )
 
     def clear(self, bg: Optional[Color] = None) -> None:
         style = Style(bg=bg) if bg is not None else DEFAULT_STYLE
         self._buffer.clear(Cell(" ", style))
         if bg is not None:
-            self._rgb[:] = bytes((bg.r, bg.g, bg.b)) * (self.width * self.height)
+            # 6 bytes per cell: the same color for the top and bottom
+            # halves. (A 3-byte pattern would shrink the bytearray by
+            # half and corrupt every later RGB read.)
+            self._rgb[:] = bytes((bg.r, bg.g, bg.b, bg.r, bg.g, bg.b)) * (self.width * self.height)
         else:
             self._rgb[:] = self._rgb_zeros
         self._has_rgb = False
@@ -1257,12 +1429,37 @@ class Canvas:
 
 
 class Renderer:
+    """Turns a Canvas into terminal output, once per frame.
+
+    With libafw_render present and RGB data on the canvas, the video
+    frame is encoded by the native Zig renderer (diffed against the
+    previous frame; a zero return means "nothing changed") and text
+    widgets are layered on top as cursor-addressed overlay runs. The
+    fast native entry point (afw_render_frame_fast, when the loaded
+    library provides it) keeps its own previous frame inside the .so,
+    so the current frame is passed as a zero-copy view of the canvas
+    RGB bytearray. Without the library, _build_ansi renders the same
+    frame in pure Python — including the RGB layer as half-block
+    glyphs, so video output is identical, just slower.
+    """
+
     def __init__(self, terminal: Terminal):
         self.terminal = terminal
         self._prev_rgb: Optional[bytes] = None
         self._native_lib = _load_native_render_lib()
+        self._native_fast = _load_native_render_fast()
         self._out_buf = None
         self._out_buf_cap = 0
+        # Pure-Python path: per-row "was this row already blank last
+        # frame" memory, so empty rows can be skipped (see _build_ansi).
+        self._prev_row_empty: Optional[list[bool]] = None
+        # Fast native path: whether the .so's internal previous frame
+        # currently matches what is on screen. Anything rendered
+        # through the pure-Python path in between (or a resize, or the
+        # first frame) forces a full re-render.
+        self._last_was_native = False
+        self._fast_ready = False
+        self._fast_size: tuple[int, int] = (0, 0)
 
     def render_subpixel(self, canvas: "Canvas") -> None:
         self.render(canvas)
@@ -1272,26 +1469,46 @@ class Renderer:
 
     def render(self, canvas: "Canvas") -> None:
         if self._native_lib is not None and canvas.has_rgb_data():
-            rgb = canvas.get_rgb_bytes()
             cols = canvas.width
             rows = canvas.height
             needed_cap = cols * rows * 40
             if self._out_buf is None or self._out_buf_cap < needed_cap:
                 self._out_buf_cap = needed_cap
                 self._out_buf = ctypes.create_string_buffer(needed_cap)
-            written = self._native_lib.afw_render_frame(
-                rgb,
-                self._prev_rgb,
-                cols,
-                rows,
-                self._out_buf,
-                self._out_buf_cap,
-            )
-            # A return value of 0 means "every cell is identical to the
-            # previous frame" -- a successful no-op, NOT a failure. The
-            # old code fell through to the pure-Python ANSI rebuild in
-            # that case, making unchanged frames the *slowest* frames.
-            self._prev_rgb = rgb
+            if self._native_fast is not None:
+                # Zero-copy: a ctypes view of the canvas's live RGB
+                # bytearray (no per-frame bytes() copy, no allocation).
+                # The .so diffs against its own internal previous
+                # frame, so force a full render whenever that stored
+                # frame can't match the screen: first frame, resize,
+                # or a pure-Python render in between.
+                view = canvas.get_rgb_view()
+                buf = (ctypes.c_ubyte * len(view)).from_buffer(view)
+                force_full = (
+                    not self._fast_ready
+                    or (cols, rows) != self._fast_size
+                    or not self._last_was_native
+                )
+                written = self._native_fast(
+                    buf, cols, rows, self._out_buf, self._out_buf_cap, force_full
+                )
+                self._fast_ready = True
+                self._fast_size = (cols, rows)
+            else:
+                rgb = canvas.get_rgb_bytes()
+                written = self._native_lib.afw_render_frame(
+                    rgb,
+                    self._prev_rgb,
+                    cols,
+                    rows,
+                    self._out_buf,
+                    self._out_buf_cap,
+                )
+                # A return value of 0 means "every cell is identical to the
+                # previous frame" -- a successful no-op, NOT a failure. The
+                # old code fell through to the pure-Python ANSI rebuild in
+                # that case, making unchanged frames the *slowest* frames.
+                self._prev_rgb = rgb
             try:
                 if written > 0:
                     # string_at copies only `written` bytes; slicing
@@ -1314,43 +1531,118 @@ class Renderer:
                             sys.stdout.write(text_overlay)
 
                 self.terminal.flush()
+                self._last_was_native = True
                 return
             except Exception:
+                # A native write failure falls through to the
+                # pure-Python path, which now renders the RGB layer too
+                # instead of blanking the screen.
                 pass
 
         buf = canvas.get_buffer()
-        ansi = self._build_ansi(buf)
+        ansi = self._build_ansi(buf, canvas)
         self.terminal.write(ansi)
         self.terminal.flush()
+        self._last_was_native = False
 
     @staticmethod
     def _scan_text_overlay(canvas: "Canvas") -> str:
-        """Collect non-video cells as cursor-positioned ANSI runs."""
+        """Collect non-video cells as cursor-positioned ANSI runs.
+
+        Consecutive cells with the same style merge into one run: one
+        cursor move + one style sequence for the whole run, instead of
+        one escape sequence per character."""
         buf = canvas.get_buffer()
         width = buf.width
         parts = []
         append = parts.append
+        run = None  # [y, x, style, chars]
         for i, cell in enumerate(buf.cells):
             ch = cell.ch
             if ch == " " or ch == "\x00" or ch == "\u2580" or ch == "\u2588":
+                if run is not None:
+                    append(f"\x1b[{run[0] + 1};{run[1] + 1}H{run[2].to_ansi_seq()}{''.join(run[3])}\x1b[0m")
+                    run = None
                 continue
             y, x = divmod(i, width)
-            append(f"\x1b[{y + 1};{x + 1}H{cell.style.to_ansi_seq()}{ch}\x1b[0m")
+            if (
+                run is not None
+                and run[2] == cell.style
+                and y == run[0]
+                and x == run[1] + len(run[3])
+            ):
+                run[3].append(ch)
+            else:
+                if run is not None:
+                    append(f"\x1b[{run[0] + 1};{run[1] + 1}H{run[2].to_ansi_seq()}{''.join(run[3])}\x1b[0m")
+                run = [y, x, cell.style, [ch]]
+        if run is not None:
+            append(f"\x1b[{run[0] + 1};{run[1] + 1}H{run[2].to_ansi_seq()}{''.join(run[3])}\x1b[0m")
         return "".join(parts)
 
-    def _build_ansi(self, buf: Buffer) -> str:
+    def _build_ansi(self, buf: Buffer, canvas: Optional["Canvas"] = None) -> str:
+        """Pure-Python ANSI builder: full-frame repaint from the text
+        buffer, with the RGB layer rendered as half-block '▀' glyphs
+        wherever the text layer is blank.
+
+        Rows that are blank now and were blank on the previous frame
+        are skipped entirely (the terminal still shows blank there);
+        the first frame and resizes always repaint everything.
+        """
         out = io.StringIO()
         write = out.write
         cells = buf.cells
         width = buf.width
-        prev_style: Optional[Style] = None
-        pos = 0
+        height = buf.height
         force_ascii = _compat.force_ascii
-        for y in range(buf.height):
+        rgb = canvas.get_rgb_view() if (canvas is not None and canvas.has_rgb_data()) else None
+
+        # A row is empty when it paints nothing: every cell blank with
+        # no colors and (when an RGB layer is present) all-zero RGB.
+        row_empty: list[bool] = []
+        for y in range(height):
+            base = y * width
+            empty = True
+            for i in range(base, base + width):
+                cell = cells[i]
+                if cell.ch not in (" ", "\x00") or cell.style.fg is not None or cell.style.bg is not None:
+                    empty = False
+                    break
+                if rgb is not None and any(rgb[i * 6:i * 6 + 6]):
+                    empty = False
+                    break
+            row_empty.append(empty)
+        prev_empty = self._prev_row_empty
+        skip_rows = prev_empty is not None and len(prev_empty) == height
+
+        pos = 0
+        prev_style: Optional[Style] = None
+        for y in range(height):
+            if row_empty[y] and skip_rows and prev_empty[y]:
+                pos += width
+                continue
             write(f"\x1b[{y + 1};1H")
             prev_style = None
             for x in range(width):
                 cell = cells[pos]
+                if (
+                    rgb is not None
+                    and (cell.ch == " " or cell.ch == "\x00")
+                    and cell.style.fg is None
+                    and cell.style.bg is None
+                ):
+                    base = pos * 6
+                    tr, tg, tb, br, bg, bb = rgb[base:base + 6]
+                    if not (tr == tg == tb == br == bg == bb == 0):
+                        style = Style(fg=Color(tr, tg, tb), bg=Color(br, bg, bb))
+                        if style != prev_style:
+                            if prev_style is not None:
+                                write("\x1b[0m")
+                            write(style.to_ansi_seq())
+                            prev_style = style
+                        write("\u2580")
+                        pos += 1
+                        continue
                 pos += 1
                 if cell.ch == "\x00":
                     continue
@@ -1369,10 +1661,22 @@ class Renderer:
                     write(cell.ch)
         if prev_style is not None:
             write("\x1b[0m")
+        self._prev_row_empty = row_empty
         return out.getvalue()
 
 
 class AudioPlayer:
+    """Plays an audio file in a background process (ffplay, mpv, or
+    aplay for .wav), so playback never blocks the render loop.
+
+    play() returns False when no player backend is installed or the
+    source file does not exist (URLs are exempt from the existence
+    check). pause()/resume() use POSIX process groups and are not
+    available on Windows, where they raise NotImplementedError instead
+    of silently doing nothing. stop() always reaps the child process
+    (terminate, then kill + wait) so no zombie is left behind.
+    """
+
     def __init__(self):
         self._proc: Optional[subprocess.Popen] = None
         self._lock = threading.Lock()
@@ -1388,6 +1692,11 @@ class AudioPlayer:
     ) -> bool:
         self.stop()
         source_str = str(source)
+        # A missing file used to return True and fail silently inside
+        # the player (whose output goes to DEVNULL). URLs are exempt:
+        # ffplay/mpv can stream them, and they are not local paths.
+        if "://" not in source_str and not Path(source_str).exists():
+            return False
         if not shutil.which("ffplay") and not shutil.which("mpv") and not shutil.which("aplay"):
             return False
 
@@ -1443,18 +1752,42 @@ class AudioPlayer:
     def stop(self) -> None:
         with self._lock:
             if self._proc is not None:
+                proc = self._proc
                 try:
-                    self._proc.terminate()
-                    self._proc.wait(timeout=0.2)
+                    proc.terminate()
+                    proc.wait(timeout=0.2)
+                except subprocess.TimeoutExpired:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    try:
+                        # Always wait() after kill(): otherwise the
+                        # child stays a zombie until the parent exits.
+                        proc.wait(timeout=0.2)
+                    except Exception:
+                        pass
                 except Exception:
                     try:
-                        self._proc.kill()
+                        proc.kill()
+                    except Exception:
+                        pass
+                    try:
+                        proc.wait(timeout=0.2)
                     except Exception:
                         pass
                 self._proc = None
                 self._paused = False
 
+    def _require_posix_process_groups(self) -> None:
+        if sys.platform == "win32":
+            raise NotImplementedError(
+                "pause()/resume() need POSIX process groups (os.killpg), "
+                "which Windows does not provide"
+            )
+
     def pause(self) -> None:
+        self._require_posix_process_groups()
         with self._lock:
             if self._proc is not None and not self._paused:
                 try:
@@ -1464,6 +1797,7 @@ class AudioPlayer:
                     pass
 
     def resume(self) -> None:
+        self._require_posix_process_groups()
         with self._lock:
             if self._proc is not None and self._paused:
                 try:
@@ -1480,6 +1814,9 @@ class AudioPlayer:
 
 
 class Sound:
+    """A one-shot sound effect: wraps one audio file in its own
+    AudioPlayer. See AudioPlayer for play/stop/pause semantics."""
+
     def __init__(self, path: Union[str, Path]):
         self.path = Path(path)
         self._player = AudioPlayer()
@@ -1502,10 +1839,28 @@ class Sound:
 
 
 class Music(Sound):
+    """A music track: identical to Sound (a longer audio file played
+    through its own AudioPlayer). Kept as a separate name so call sites
+    can say what the audio is for."""
+
     pass
 
 
+import inspect
+
+
+
 class Widget:
+    """Base class for everything a Scene can draw.
+
+    x/y are the widget's position in cells (floats; drawn at the
+    truncated cell), z orders drawing (higher z draws later, on top).
+    visible=False skips drawing entirely. opacity is visibility-only,
+    not blending: opacity <= 0 hides the widget, any value above 0
+    draws it fully opaque (animate it for fade in/out effects).
+    Subclasses implement draw(canvas); update(dt) is optional.
+    """
+
     def __init__(self, x: float = 0, y: float = 0, width: int = 0, height: int = 0, *, z: int = 0):
         self.x = float(x)
         self.y = float(y)
@@ -1522,6 +1877,15 @@ class Widget:
 
 
 class TextWidget(Widget):
+    """A (possibly multi-line) text label.
+
+    Canonical form: TextWidget(text, x, y, style). The legacy positional
+    form TextWidget(x, y, text, style) is also accepted — the bundled
+    examples use it — but prefer the canonical form in new code: a
+    numeric-looking text in the legacy form is ambiguous and is NOT
+    swapped (TextWidget(0, 0, 0) means text "0" at 0,0).
+    """
+
     def __init__(
         self,
         text: str = "",
@@ -1565,6 +1929,8 @@ class TextWidget(Widget):
 
 
 class BoxWidget(Widget):
+    """A bordered box, optionally with a title drawn on the top edge."""
+
     def __init__(
         self,
         x: float = 0,
@@ -1589,6 +1955,8 @@ class BoxWidget(Widget):
 
 
 class SpriteWidget(Widget):
+    """Draws a Sprite (reusable ASCII/unicode art) at x, y."""
+
     def __init__(self, x: float, y: float, sprite: Sprite, *, z: int = 0):
         super().__init__(x, y, sprite.width, sprite.height, z=z)
         self.sprite = sprite
@@ -1602,6 +1970,9 @@ class SpriteWidget(Widget):
 
 
 class ProgressBarWidget(Widget):
+    """A horizontal progress bar: value/max_value fills width cells
+    with fill_char, the rest with empty_char."""
+
     def __init__(
         self,
         x: float = 0,
@@ -1636,6 +2007,17 @@ class ProgressBarWidget(Widget):
 
 
 class VideoFrameWidget(Widget):
+    """Displays one packed RGB video frame (cols*rows*6 bytes, top+bottom
+    RGB per cell) at x, y.
+
+    Frame-access contract (shared with FrameAsset.get_frame and the
+    generated AfwFrames.read_frame, which clamp out-of-range indices):
+    set_frame_rgb() accepts any bytes; a frame shorter than
+    cols*rows*6 bytes is ignored (the previous frame stays on screen)
+    instead of raising, so a truncated stream degrades to a held frame
+    rather than crashing playback.
+    """
+
     def __init__(
         self,
         x: float = 0,
@@ -1682,11 +2064,19 @@ class VideoFrameWidget(Widget):
 
 
 class Scene:
+    """A list of widgets plus an AnimationManager. draw() renders the
+    children in z order (skipping invisible / fully transparent ones);
+    update(dt) advances the animations and calls each child's update()
+    if it defines one. A child's update() may take dt or no arguments;
+    the arity is probed once per widget type, and errors raised inside
+    a child's update() propagate instead of being swallowed."""
+
     def __init__(self):
         self.children: list[Widget] = []
         self.animations = AnimationManager()
         self._draw_order: Optional[list[Widget]] = None
         self._z_signature: Optional[tuple[int, ...]] = None
+        self._update_takes_arg: dict[type, bool] = {}
 
     def add(self, widget: Widget) -> Widget:
         self.children.append(widget)
@@ -1715,17 +2105,48 @@ class Scene:
             if child.visible and child.opacity > 0.0:
                 child.draw(canvas)
 
+    def _update_takes_dt(self, child: Widget) -> bool:
+        """True if child's update() accepts a dt argument. Probed once
+        per widget type via inspect; if the signature can't be read,
+        default to passing dt (an error inside update() then surfaces
+        instead of being hidden)."""
+        cls = type(child)
+        cached = self._update_takes_arg.get(cls)
+        if cached is not None:
+            return cached
+        takes_arg = True
+        try:
+            sig = inspect.signature(child.update)
+            params = list(sig.parameters.values())
+            positional = [
+                p for p in params
+                if p.kind in (inspect.Parameter.POSITIONAL_ONLY,
+                              inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            ]
+            var_positional = any(
+                p.kind == inspect.Parameter.VAR_POSITIONAL for p in params
+            )
+            takes_arg = bool(positional) or var_positional
+        except (ValueError, TypeError):
+            takes_arg = True
+        self._update_takes_arg[cls] = takes_arg
+        return takes_arg
+
     def update(self, dt: float) -> None:
         self.animations.update(dt)
         for child in list(self.children):
             if hasattr(child, "update") and callable(child.update):
-                try:
+                if self._update_takes_dt(child):
                     child.update(dt)
-                except TypeError:
-                    pass
+                else:
+                    child.update()
 
 
 class FPSCounter:
+    """Smoothed frames-per-second readout: recomputes from the frame
+    count every 0.2s so the displayed value doesn't jitter frame to
+    frame. str(counter) gives one decimal place."""
+
     def __init__(self):
         self._last_time: float = 0.0
         self._frames: int = 0
@@ -1752,6 +2173,19 @@ class FPSCounter:
 
 
 class App:
+    """The main loop: owns the terminal (raw mode + alt screen), paces
+    frames to target_fps, dispatches input, and drives the scene.
+
+    Build the scene, register callbacks with the @app.on_* decorators
+    (or app.ticker() for periodic callbacks), then call run(). run()
+    blocks until app.stop() is called or Ctrl-C is pressed, and fully
+    restores the terminal on exit, so several App() instances can run
+    one after another in the same process.
+
+    Constructor: App(title="Terminal Animation", target_fps=60.0,
+    mouse=False, show_fps=False). target_fps must be a positive number.
+    """
+
     def __init__(
         self,
         title: str = "Terminal Animation",
@@ -1760,9 +2194,6 @@ class App:
         mouse: bool = False,
         show_fps: bool = False,
     ):
-        if isinstance(title, (int, float)):
-            target_fps = float(title)
-            title = "Terminal Animation"
         self.title = str(title)
         self.target_fps = float(target_fps) if target_fps and target_fps > 0 else 60.0
         self.mouse = mouse
@@ -1837,15 +2268,23 @@ class App:
             prev_time = time.perf_counter()
 
             while self.running:
+                # Pace to the frame deadline: sleep the bulk of the
+                # remaining wait, then spin the last sliver (<=1ms) so
+                # the frame starts on time instead of early. Sleeping a
+                # fixed fraction of the wait and proceeding unchecked
+                # used to run frames faster than target_fps.
+                deadline = prev_time + target_dt
+                while self.running:
+                    now = time.perf_counter()
+                    remaining = deadline - now
+                    if remaining <= 0:
+                        break
+                    if remaining > 0.001:
+                        time.sleep(remaining - 0.0005)
+                    else:
+                        time.sleep(0)
                 now = time.perf_counter()
                 dt = now - prev_time
-                if dt < target_dt:
-                    wait = target_dt - dt
-                    if wait > 0.001:
-                        time.sleep(wait * 0.8)
-                    time.sleep(0.0001)
-                    now = time.perf_counter()
-                    dt = now - prev_time
                 prev_time = now
                 self.elapsed_time += dt
                 self.frame_count += 1
@@ -1905,6 +2344,7 @@ class App:
 
 
 __all__ = [
+    "__version__",
     "old", "modern", "is_old",
     "native_render_available",
     "Color", "Colors", "Style", "DEFAULT_STYLE",

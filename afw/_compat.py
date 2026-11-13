@@ -2,6 +2,10 @@ from __future__ import annotations
 
 
 class _CompatState:
+    """Global old-terminal fallback state: truecolor (default True)
+    and force_ascii (default False). Changed by old()/modern(); read by
+    Color (256-color quantization) and Canvas (ASCII box chars)."""
+
     truecolor: bool = True
     force_ascii: bool = False
 

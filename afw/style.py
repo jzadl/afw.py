@@ -8,6 +8,12 @@ from .color import Color
 
 @dataclass(frozen=True, slots=True)
 class Style:
+    """How one cell looks: optional truecolor fg/bg plus bold, dim,
+    italic, underline, blink, reverse, strikethrough. Immutable and
+    hashable; merged() overlays another style on top of this one
+    (only its set fields win); to_ansi_seq() renders the SGR sequence
+    (truecolor 38;2/48;2, or 256-color 38;5/48;5 in old() mode)."""
+
     fg: Optional[Color] = None
     bg: Optional[Color] = None
     bold: bool = False

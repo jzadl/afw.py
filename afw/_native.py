@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import sys
 from pathlib import Path
 
@@ -15,12 +16,14 @@ else:
 
 
 def _load_native_render_lib():
+    """Load libafw_render (ctypes CDLL) once, or None if it is not
+    built/installed. Searches next to the project root (package layout)
+    or next to the single-file bundle, then the system library path."""
     global _native_render_lib, _native_render_tried
     if _native_render_tried:
         return _native_render_lib
     _native_render_tried = True
     try:
-        import ctypes
         candidates = []
         try:
             here = Path(__file__).resolve()
@@ -51,6 +54,34 @@ def _load_native_render_lib():
     except Exception:
         _native_render_lib = None
     return _native_render_lib
+
+
+def _load_native_render_fast():
+    """Return the afw_render_frame_fast entry point if the loaded lib
+    provides it, else None.
+
+    The fast entry point keeps its own previous-frame buffer inside
+    the .so, so callers pass only the current frame (as a zero-copy
+    view of the canvas RGB bytearray) plus a force_full flag — no
+    per-frame copy of the RGB buffer on the Python side. Libraries
+    built before this entry point existed simply lack it, and the
+    caller falls back to afw_render_frame.
+    """
+    lib = _load_native_render_lib()
+    if lib is None:
+        return None
+    try:
+        fn = lib.afw_render_frame_fast
+    except AttributeError:
+        return None
+    fn.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_int, ctypes.c_int,
+        ctypes.POINTER(ctypes.c_char), ctypes.c_size_t,
+        ctypes.c_bool,
+    ]
+    fn.restype = ctypes.c_size_t
+    return fn
 
 
 def native_render_available() -> bool:

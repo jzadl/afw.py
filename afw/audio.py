@@ -4,12 +4,24 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import Optional, Union
 
 
 class AudioPlayer:
+    """Plays an audio file in a background process (ffplay, mpv, or
+    aplay for .wav), so playback never blocks the render loop.
+
+    play() returns False when no player backend is installed or the
+    source file does not exist (URLs are exempt from the existence
+    check). pause()/resume() use POSIX process groups and are not
+    available on Windows, where they raise NotImplementedError instead
+    of silently doing nothing. stop() always reaps the child process
+    (terminate, then kill + wait) so no zombie is left behind.
+    """
+
     def __init__(self):
         self._proc: Optional[subprocess.Popen] = None
         self._lock = threading.Lock()
@@ -25,6 +37,11 @@ class AudioPlayer:
     ) -> bool:
         self.stop()
         source_str = str(source)
+        # A missing file used to return True and fail silently inside
+        # the player (whose output goes to DEVNULL). URLs are exempt:
+        # ffplay/mpv can stream them, and they are not local paths.
+        if "://" not in source_str and not Path(source_str).exists():
+            return False
         if not shutil.which("ffplay") and not shutil.which("mpv") and not shutil.which("aplay"):
             return False
 
@@ -80,18 +97,42 @@ class AudioPlayer:
     def stop(self) -> None:
         with self._lock:
             if self._proc is not None:
+                proc = self._proc
                 try:
-                    self._proc.terminate()
-                    self._proc.wait(timeout=0.2)
+                    proc.terminate()
+                    proc.wait(timeout=0.2)
+                except subprocess.TimeoutExpired:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    try:
+                        # Always wait() after kill(): otherwise the
+                        # child stays a zombie until the parent exits.
+                        proc.wait(timeout=0.2)
+                    except Exception:
+                        pass
                 except Exception:
                     try:
-                        self._proc.kill()
+                        proc.kill()
+                    except Exception:
+                        pass
+                    try:
+                        proc.wait(timeout=0.2)
                     except Exception:
                         pass
                 self._proc = None
                 self._paused = False
 
+    def _require_posix_process_groups(self) -> None:
+        if sys.platform == "win32":
+            raise NotImplementedError(
+                "pause()/resume() need POSIX process groups (os.killpg), "
+                "which Windows does not provide"
+            )
+
     def pause(self) -> None:
+        self._require_posix_process_groups()
         with self._lock:
             if self._proc is not None and not self._paused:
                 try:
@@ -101,6 +142,7 @@ class AudioPlayer:
                     pass
 
     def resume(self) -> None:
+        self._require_posix_process_groups()
         with self._lock:
             if self._proc is not None and self._paused:
                 try:
@@ -117,6 +159,9 @@ class AudioPlayer:
 
 
 class Sound:
+    """A one-shot sound effect: wraps one audio file in its own
+    AudioPlayer. See AudioPlayer for play/stop/pause semantics."""
+
     def __init__(self, path: Union[str, Path]):
         self.path = Path(path)
         self._player = AudioPlayer()
@@ -139,4 +184,8 @@ class Sound:
 
 
 class Music(Sound):
+    """A music track: identical to Sound (a longer audio file played
+    through its own AudioPlayer). Kept as a separate name so call sites
+    can say what the audio is for."""
+
     pass

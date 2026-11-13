@@ -26,6 +26,16 @@ def _box_chars() -> dict[str, str]:
 
 
 class Canvas:
+    """A drawable grid of text cells plus a per-cell RGB layer.
+
+    The text layer holds one Cell per grid position (written by put /
+    draw_* / blit). The RGB layer holds 6 bytes per cell (top RGB +
+    bottom RGB) and is written by put_subpixel / blit_subpixel_frame;
+    the renderer turns it into half-block glyphs, natively when
+    libafw_render is present and through the pure-Python ANSI builder
+    otherwise.
+    """
+
     def __init__(self, buffer_or_width: Union[Buffer, int], height: Optional[int] = None):
         if isinstance(buffer_or_width, Buffer):
             self._buffer = buffer_or_width
@@ -101,11 +111,11 @@ class Canvas:
     def get_rgb_bytes(self) -> bytes:
         return bytes(self._rgb)
 
-    def buffer_has_content(self) -> bool:
-        for c in self._buffer.cells:
-            if c.ch != " " or (c.style.bg is not None and c.style.bg != Color(0, 0, 0)):
-                return True
-        return False
+    def get_rgb_view(self) -> bytearray:
+        """Zero-copy view of the internal RGB layer (6 bytes per cell:
+        top RGB, bottom RGB). Intended for the native renderer only;
+        callers must not mutate it. Use get_rgb_bytes() for a snapshot."""
+        return self._rgb
 
     def put(self, x: int, y: int, ch: str, style: Style = DEFAULT_STYLE) -> None:
         if not (0 <= x < self.width and 0 <= y < self.height):
@@ -165,9 +175,9 @@ class Canvas:
         else:
             if is_top:
                 fg = color
-                bg = cell.style.bg
+                bg = cell.style.bg or Color(0, 0, 0)
             else:
-                fg = cell.style.fg
+                fg = cell.style.fg or Color(0, 0, 0)
                 bg = color
 
         if fg is not None and bg is not None and fg == bg:
@@ -176,13 +186,39 @@ class Canvas:
             self._buffer.set(cx, cy, Cell("\u2580", Style(fg=fg, bg=bg)))
 
     def flush_subpixels(self) -> None:
-        pass
+        """Merge the RGB layer into the text buffer.
+
+        Every cell whose text content is blank or already a half/full
+        block becomes a '▀' cell with fg/bg taken from the RGB layer,
+        so the frame also renders correctly through the pure-Python
+        path (which reads the text buffer). Cells holding real text
+        are left alone, and all-black RGB cells stay blank. A no-op
+        when the canvas has no RGB data.
+        """
+        if not self._has_rgb:
+            return
+        rgb = self._rgb
+        width = self.width
+        for i, cell in enumerate(self._buffer.cells):
+            if cell.ch not in (" ", "\u2580", "\u2588"):
+                continue
+            base = i * 6
+            tr, tg, tb, br, bg, bb = rgb[base:base + 6]
+            if tr == tg == tb == br == bg == bb == 0:
+                continue
+            self._buffer.set(
+                i % width, i // width,
+                Cell("\u2580", Style(fg=Color(tr, tg, tb), bg=Color(br, bg, bb))),
+            )
 
     def clear(self, bg: Optional[Color] = None) -> None:
         style = Style(bg=bg) if bg is not None else DEFAULT_STYLE
         self._buffer.clear(Cell(" ", style))
         if bg is not None:
-            self._rgb[:] = bytes((bg.r, bg.g, bg.b)) * (self.width * self.height)
+            # 6 bytes per cell: the same color for the top and bottom
+            # halves. (A 3-byte pattern would shrink the bytearray by
+            # half and corrupt every later RGB read.)
+            self._rgb[:] = bytes((bg.r, bg.g, bg.b, bg.r, bg.g, bg.b)) * (self.width * self.height)
         else:
             self._rgb[:] = self._rgb_zeros
         self._has_rgb = False

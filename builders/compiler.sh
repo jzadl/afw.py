@@ -42,24 +42,55 @@ _install_pkgs() {
 
 _install_zig_fallback() {
     echo "  Zig not in package manager, downloading binary..."
-    local version
-    version="$(curl -fsSL https://ziglang.org/download/index.json 2>/dev/null | grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*: *"//;s/"//')" || true
-    if [ -z "$version" ]; then
-        version="0.16.0"
-        echo "  Could not fetch latest version, using $version"
+    # Pick the latest stable release from index.json (its first
+    # "version" is the master dev build, not a release — never use
+    # head -1 on it). Falls back to the pinned version below.
+    local version="0.17.1"
+    if has python3; then
+        local detected
+        detected="$(python3 -c '
+import json, urllib.request
+try:
+    with urllib.request.urlopen("https://ziglang.org/download/index.json", timeout=15) as r:
+        d = json.load(r)
+    vers = sorted((k for k in d if k != "master"), key=lambda v: [int(x) for x in v.split(".")])
+    print(vers[-1])
+except Exception:
+    print("")
+' 2>/dev/null)" || detected=""
+        if [ -n "$detected" ]; then
+            version="$detected"
+        else
+            echo "  Could not fetch latest version, using $version"
+        fi
     fi
     local arch="$(uname -m)"
     local os="$(uname -s | tr '[:upper:]' '[:lower:]')"
-    case "$arch" in x86_64) arch="x86_64" ;; aarch64|arm64) arch="aarch64" ;; esac
-    local url="https://ziglang.org/download/${version}/zig-${os}-${arch}-${version}.tar.xz"
+    case "$arch" in x86_64) arch="x86_64" ;; aarch64|arm64) arch="aarch64" ;; *) echo "  Unsupported architecture: $arch" ; return 1 ;; esac
+    case "$os" in linux|darwin) ;; *) echo "  Unsupported OS: $os" ; return 1 ;; esac
+    # Upstream names the tarball zig-<arch>-<os>-<version>.tar.xz
+    # (e.g. zig-x86_64-linux-0.17.1.tar.xz) — arch before OS.
+    local url="https://ziglang.org/download/${version}/zig-${arch}-${os}-${version}.tar.xz"
     echo "  URL: $url"
     local tmp="$(mktemp -d)"
     curl -fsSL "$url" -o "$tmp/zig.tar.xz"
-    tar xf "$tmp/zig.tar.xz" -C "$tmp"
+    tar --no-same-owner -xf "$tmp/zig.tar.xz" -C "$tmp"
     sudo mv "$tmp"/zig-* /opt/zig
     sudo ln -sf /opt/zig/zig /usr/local/bin/zig
     rm -rf "$tmp"
     echo "  Zig $version installed to /opt/zig"
+}
+
+# _ver_ge HAVE REQUIRED: exit 0 if dotted version HAVE >= REQUIRED.
+_ver_ge() {
+    local IFS=.
+    local i have=($1) req=($2)
+    for i in 0 1 2; do
+        local h=${have[$i]:-0} r=${req[$i]:-0}
+        if (( 10#$h > 10#$r )); then return 0; fi
+        if (( 10#$h < 10#$r )); then return 1; fi
+    done
+    return 0
 }
 
 if ! has zig; then
@@ -77,6 +108,19 @@ if ! has zig; then
     esac
 else
     echo "[x] zig: $(zig version)"
+fi
+
+# afw_media.zig uses the new std.Io API, which needs Zig 0.17.1+;
+# older Zig fails with cryptic compile errors, so fail fast here
+# instead of halfway through the build.
+REQUIRED_ZIG="0.17.1"
+if has zig; then
+    _have_zig="$(zig version | cut -d- -f1 | cut -d+ -f1)"
+    if ! _ver_ge "$_have_zig" "$REQUIRED_ZIG"; then
+        echo "  Zig $_have_zig is too old: afw needs Zig $REQUIRED_ZIG or newer."
+        echo "  Install it from https://ziglang.org/download/ and re-run."
+        exit 1
+    fi
 fi
 
 if ! has ffmpeg; then

@@ -11,14 +11,13 @@ Rendering goes through afw.VideoFrameWidget, which uses
 libafw_render.so (a Zig shared library, if built) to convert RGB frame
 data to diffed half-block ANSI in a tight loop with zero allocations;
 this is what makes full-resolution video playback fast on ordinary
-(non-server) hardware, where the pure-Python per-cell path alone tends
-to top out around 12fps on a fullscreen frame. The native path is used
-automatically whenever a frame is pure video (nothing else drawn that
-frame); as soon as you add other widgets on top (captions, a border,
-controls), afw.py composites everything through the normal Python path
-instead; same correct visual output, just the tradeoff you'd expect
-for mixing UI with video. If libafw_render isn't built at all, every
-codepath here still works, just slower; nothing requires the .so.
+(non-server) hardware, where the pure-Python path alone tends to top
+out around 12fps on a fullscreen frame. The native path is used
+automatically whenever a frame carries RGB data; text widgets drawn on
+top are composited via the renderer's overlay scan, with the same
+visual output. If libafw_render isn't built at all, every codepath
+here still works through the pure-Python renderer, just slower;
+nothing requires the .so.
 
 Two player classes and two widgets:
     StreamPlayer    : plays a live video file via afw_media --stream
@@ -325,10 +324,9 @@ class StreamPlayer:
         the video widget is added to the scene (at z=0) and before
         app.run(); use it to add your own widgets on top (captions,
         controls, a border) at z=1+. Adding anything this way means
-        each frame composites through the normal path rather than the
-        pure-native fast path (Canvas.buffer_has_content() will be
-        True), which is the correct and expected tradeoff for mixing UI
-        with video.
+        each frame composites the text overlay on top of the video
+        (Canvas.buffer_touched() will be True), which is the correct
+        and expected tradeoff for mixing UI with video.
         """
         self._spawn()
         assert self._reader is not None
@@ -453,10 +451,12 @@ class FrameAsset:
         return self._frame_count
 
     def get_frame(self, index: int) -> bytes:
-        if index < 0 or index >= self._frame_count:
-            raise IndexError(
-                f"frame index {index} out of range [0, {self._frame_count})"
-            )
+        """Returns the raw cell bytes for `index`, clamped into range
+        so a caller looping slightly past the end (off-by-one, or a
+        video whose reported frame count was approximate) degrades to
+        repeating the last frame instead of raising — the same contract
+        as the generated AfwFrames.read_frame."""
+        index = max(0, min(index, self._frame_count - 1))
         offset = HEADER_SIZE + index * self._frame_bytes
         self._fh.seek(offset)
         data = self._fh.read(self._frame_bytes)
@@ -488,9 +488,9 @@ class VideoWidget(afw.VideoFrameWidget):
     playback clock (independent of the frame afw.py itself renders at).
     Thin wrapper around afw.VideoFrameWidget; it handles frame timing
     and pulls bytes from the asset; VideoFrameWidget handles getting
-    those bytes on screen (through the native Zig fast path when nothing
-    else is drawn that frame, or the composited path automatically when
-    something is, e.g. UI widgets layered on top at a higher z).
+    those bytes on screen (through the native Zig fast path when the
+    library is built — text widgets layer on top via the overlay scan
+    — or the pure-Python path automatically when it isn't).
 
     Designed for compositing: add it at z=0 and put your UI widgets at
     z=1+ to draw on top. Loops by default.
@@ -632,7 +632,8 @@ class EmbeddedPlayer:
         - Still image (fps=0): shown once, then waits for user input
         - Single frame: shown, loop or wait depending on loop flag
         - Terminal resize: full repaint on next frame
-        - Missing Zig lib: RuntimeError with build instructions
+        - Missing Zig lib: playback still works through the
+          pure-Python path, just slower (no RuntimeError is raised)
         - Empty/corrupt file: caught at FrameAsset construction
     """
 

@@ -1,0 +1,22 @@
+# afw is zero-dependency: the framework itself needs only the standard
+# library. The Zig sources (afw_media, libafw_render) and ffmpeg are
+# build-time / media-time requirements, not install requirements, so
+# they are deliberately NOT listed here.
+# Keep version in sync with afw/__init__.py and builders/bundle.py.
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "afw"
+version = "0.1.0-dev"
+description = "Terminal animation framework for real 60fps animated output"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/jzadl/afw.py"
+
+[tool.setuptools]
+packages = ["afw"]

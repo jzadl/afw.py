@@ -7,6 +7,12 @@ from .style import Style, DEFAULT_STYLE
 
 
 class Sprite:
+    """Reusable ASCII/unicode art: a sparse grid of (char, style)
+    cells. Build with Sprite.from_text() (leading/trailing blank lines
+    trimmed, spaces transparent, optional per-character palette), draw
+    with Canvas.blit() or SpriteWidget. Sprites are positionless; the
+    caller supplies x/y at draw time."""
+
     def __init__(self, width: int, height: int):
         self.width = width
         self.height = height

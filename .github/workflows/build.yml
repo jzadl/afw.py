@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
   release:
     types: [published]
   workflow_dispatch:
@@ -29,7 +30,7 @@ jobs:
 
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: 0.17.1
 
       - name: Build render shared library
         shell: bash
@@ -52,7 +53,10 @@ jobs:
         shell: bash
         run: python3 builders/bundle.py
 
+      # Packaging only happens for releases, even though this job also
+      # runs on pushes and PRs (where it only verifies the build).
       - name: Package (release zip only)
+        if: github.event_name == 'release'
         shell: bash
         run: |
           mkdir -p dist/examples
@@ -71,13 +75,45 @@ jobs:
           fi
 
       - uses: actions/upload-artifact@v4
+        if: github.event_name == 'release'
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}.zip
 
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+
+      - name: Install ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg
+
+      - name: Build native renderer + afw_media
+        run: |
+          zig build-lib afw_render.zig -dynamic -fPIC -O ReleaseFast -femit-bin=libafw_render.so
+          zig build-exe afw_media.zig -O ReleaseFast -femit-bin=afw_media
+
+      - name: Generate afw.py bundle
+        run: python3 builders/bundle.py
+
+      - name: Compile-check every Python file
+        run: python3 -m py_compile $(git ls-files '*.py')
+
+      - name: Run test suite
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Verify pip install
+        run: |
+          pip install .
+          cd /tmp && python3 -c "import afw; print('pip-installed afw', afw.__version__)"
+
   release:
     if: github.event_name == 'release'
-    needs: build
+    needs: [build, test]
     runs-on: ubuntu-latest
     permissions:
       contents: write

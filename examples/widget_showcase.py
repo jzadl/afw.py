@@ -1,5 +1,6 @@
 import sys, time, math, random
-sys.path.insert(0, "/home/jzadl/Downloads/afw3")
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent / ".."))
 
 import afw
 

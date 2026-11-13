@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from typing import Any, Literal, Optional
 
 from .canvas import Canvas
@@ -10,6 +11,16 @@ from .animation import AnimationManager
 
 
 class Widget:
+    """Base class for everything a Scene can draw.
+
+    x/y are the widget's position in cells (floats; drawn at the
+    truncated cell), z orders drawing (higher z draws later, on top).
+    visible=False skips drawing entirely. opacity is visibility-only,
+    not blending: opacity <= 0 hides the widget, any value above 0
+    draws it fully opaque (animate it for fade in/out effects).
+    Subclasses implement draw(canvas); update(dt) is optional.
+    """
+
     def __init__(self, x: float = 0, y: float = 0, width: int = 0, height: int = 0, *, z: int = 0):
         self.x = float(x)
         self.y = float(y)
@@ -26,6 +37,15 @@ class Widget:
 
 
 class TextWidget(Widget):
+    """A (possibly multi-line) text label.
+
+    Canonical form: TextWidget(text, x, y, style). The legacy positional
+    form TextWidget(x, y, text, style) is also accepted — the bundled
+    examples use it — but prefer the canonical form in new code: a
+    numeric-looking text in the legacy form is ambiguous and is NOT
+    swapped (TextWidget(0, 0, 0) means text "0" at 0,0).
+    """
+
     def __init__(
         self,
         text: str = "",
@@ -69,6 +89,8 @@ class TextWidget(Widget):
 
 
 class BoxWidget(Widget):
+    """A bordered box, optionally with a title drawn on the top edge."""
+
     def __init__(
         self,
         x: float = 0,
@@ -93,6 +115,8 @@ class BoxWidget(Widget):
 
 
 class SpriteWidget(Widget):
+    """Draws a Sprite (reusable ASCII/unicode art) at x, y."""
+
     def __init__(self, x: float, y: float, sprite: Sprite, *, z: int = 0):
         super().__init__(x, y, sprite.width, sprite.height, z=z)
         self.sprite = sprite
@@ -106,6 +130,9 @@ class SpriteWidget(Widget):
 
 
 class ProgressBarWidget(Widget):
+    """A horizontal progress bar: value/max_value fills width cells
+    with fill_char, the rest with empty_char."""
+
     def __init__(
         self,
         x: float = 0,
@@ -140,6 +167,17 @@ class ProgressBarWidget(Widget):
 
 
 class VideoFrameWidget(Widget):
+    """Displays one packed RGB video frame (cols*rows*6 bytes, top+bottom
+    RGB per cell) at x, y.
+
+    Frame-access contract (shared with FrameAsset.get_frame and the
+    generated AfwFrames.read_frame, which clamp out-of-range indices):
+    set_frame_rgb() accepts any bytes; a frame shorter than
+    cols*rows*6 bytes is ignored (the previous frame stays on screen)
+    instead of raising, so a truncated stream degrades to a held frame
+    rather than crashing playback.
+    """
+
     def __init__(
         self,
         x: float = 0,
@@ -186,11 +224,19 @@ class VideoFrameWidget(Widget):
 
 
 class Scene:
+    """A list of widgets plus an AnimationManager. draw() renders the
+    children in z order (skipping invisible / fully transparent ones);
+    update(dt) advances the animations and calls each child's update()
+    if it defines one. A child's update() may take dt or no arguments;
+    the arity is probed once per widget type, and errors raised inside
+    a child's update() propagate instead of being swallowed."""
+
     def __init__(self):
         self.children: list[Widget] = []
         self.animations = AnimationManager()
         self._draw_order: Optional[list[Widget]] = None
         self._z_signature: Optional[tuple[int, ...]] = None
+        self._update_takes_arg: dict[type, bool] = {}
 
     def add(self, widget: Widget) -> Widget:
         self.children.append(widget)
@@ -219,11 +265,38 @@ class Scene:
             if child.visible and child.opacity > 0.0:
                 child.draw(canvas)
 
+    def _update_takes_dt(self, child: Widget) -> bool:
+        """True if child's update() accepts a dt argument. Probed once
+        per widget type via inspect; if the signature can't be read,
+        default to passing dt (an error inside update() then surfaces
+        instead of being hidden)."""
+        cls = type(child)
+        cached = self._update_takes_arg.get(cls)
+        if cached is not None:
+            return cached
+        takes_arg = True
+        try:
+            sig = inspect.signature(child.update)
+            params = list(sig.parameters.values())
+            positional = [
+                p for p in params
+                if p.kind in (inspect.Parameter.POSITIONAL_ONLY,
+                              inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            ]
+            var_positional = any(
+                p.kind == inspect.Parameter.VAR_POSITIONAL for p in params
+            )
+            takes_arg = bool(positional) or var_positional
+        except (ValueError, TypeError):
+            takes_arg = True
+        self._update_takes_arg[cls] = takes_arg
+        return takes_arg
+
     def update(self, dt: float) -> None:
         self.animations.update(dt)
         for child in list(self.children):
             if hasattr(child, "update") and callable(child.update):
-                try:
+                if self._update_takes_dt(child):
                     child.update(dt)
-                except TypeError:
-                    pass
+                else:
+                    child.update()

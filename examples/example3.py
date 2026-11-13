@@ -51,6 +51,10 @@ class AfwFrames:
         self.close()
 
     def read_frame(self, index: int) -> bytes:
+        """Returns the raw cell bytes for `index`, clamped into range so
+        a caller looping slightly past the end (off-by-one, or a video
+        whose reported frame count was approximate) degrades to repeating
+        the last frame instead of raising."""
         if self.frame_count == 0:
             raise ValueError("asset has zero frames")
         index = max(0, min(index, self.frame_count - 1))
@@ -120,8 +124,8 @@ def main() -> None:
         def update(dt):
             if is_video:
                 state["index"] = (state["index"] + 1) % frames.frame_count
-            else:
-                app.stop() if app.frame_count > 1 else None
+            elif app.frame_count > 1:
+                app.stop()
 
         @app.on_render
         def render(canvas):

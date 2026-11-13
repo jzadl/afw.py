@@ -30,15 +30,20 @@ you can watch a video while it's still being converted.
 
 Download the zip for your OS from the
 [latest release](https://github.com/jzadl/afw.py/releases). Each zip
-contains everything you need:
+contains the framework, the converter, the native renderer, the
+streaming player, and the examples:
 
 ```
-afw.py                 the framework (single file, zero dependencies)
+afw.py                 the framework (single file, zero Python dependencies)
 afw_media              the CLI converter
 libafw_render.so       native renderer (.dylib on macOS, .dll on Windows)
 afw_stream_player.py   streaming video player
 examples/              demos and loader scripts
 ```
+
+`afw.py` itself needs nothing but Python 3.10+. Converting or playing
+video needs `ffmpeg`/`ffprobe` on PATH (and the native renderer from
+the zip for the fast render path).
 
 Extract and run:
 
@@ -65,7 +70,7 @@ To build from source instead, see [Build from source](#build-from-source).
 Requirements:
 
 - Python 3.10+
-- Zig 0.16+
+- Zig 0.17+
 - `ffmpeg`/`ffprobe` on PATH
 
 ### Quick build (all platforms)
@@ -158,7 +163,7 @@ with Terminal() as term:
     for frame in range(120):
         canvas.clear()
         canvas.draw_text(2, 2, f"frame {frame}", Style(fg=Colors.GREEN))
-        renderer.render(canvas.buffer)
+        renderer.render(canvas)
 ```
 
 **Old terminal fallback.** Call `afw.old()` once, anywhere, before
@@ -203,6 +208,12 @@ With the native renderer loaded, a fully static frame renders at
 when nothing changed), and diffed video frames stream at up to
 17,000+ fps into the ANSI encoder.
 
+The `Canvas.clear` numbers measure the no-background path (clearing
+with a color also fills the RGB layer). The video numbers are
+encode-only — the benchmark discards the bytes instead of writing them
+to a terminal — so the real ceiling at 60fps is the terminal
+emulator's ANSI parsing speed, not the encoder.
+
 ---
 
 ## 2. afw_media: convert images & videos
@@ -226,7 +237,9 @@ afw_media banner.png --cols 200 --fit cover
 ```
 
 Produces `<name>.afwframes` (binary frame data) and `<name>.py` (a
-self-contained loader). Run the loader directly:
+self-contained loader). Without `-o`, both files are written to the
+current working directory, not next to the input file. Run the loader
+directly:
 
 ```bash
 python3 clip.py
@@ -303,7 +316,7 @@ player.play()   # blocks until the video ends or the user presses q
 `StreamPlayer(..., loop=True)` restarts the subprocess automatically
 when the stream ends, for seamless looping.
 
-#### Zig renderer (required for playback)
+#### Zig renderer (optional accelerator)
 
 `StreamPlayer` uses `libafw_render.so`, a Zig shared library that
 converts RGB frame data to diffed half-block ANSI in a single tight
@@ -312,9 +325,11 @@ frame so only changed cells are emitted.
 
 Python owns terminal setup, input parsing, and fps pacing via
 `afw.Terminal` and `afw.InputManager`, but the render hot path runs in
-compiled code. The old pure-Python render path has been removed: it
-topped out at ~12fps on fullscreen, while the Zig renderer hits
-1000+ fps.
+compiled code when the library is present. Without it, the same frames
+render through the pure-Python path (identical output, just slower: it
+topped out at ~12fps on fullscreen), while the Zig renderer hits
+1000+ fps. Nothing requires the `.so`; it is a speedup, not a
+dependency.
 
 Performance (render path only, fullscreen):
 
@@ -345,14 +360,17 @@ player = StreamPlayer("video.mp4", cols=120, target_fps=60)
 
 - `fireworks.py` - sub-pixel firework particles with true color
 - `widget_showcase.py` - all built-in widgets on one screen
-- `example*.py` - auto-generated loaders for bundled `.afwframes`
-  assets (run from the repo root; they expect `afw` on PYTHONPATH)
+- `example*.py` - auto-generated loader scripts showing how to play a
+  `.afwframes` asset (run from the repo root; they expect `afw` on
+  PYTHONPATH). No `.afwframes` assets ship in the repo — generate your
+  own with `afw_media`, e.g. `afw_media clip.mp4`, which writes
+  `clip.afwframes` plus a ready-to-run `clip.py` loader.
 
 ---
 
 ## Requirements
 
 - Python 3.10+, no pip packages, for `afw.py` and the `.py` scripts
-- Zig 0.16+ to build `afw_media` and `libafw_render.so` (only needed
+- Zig 0.17+ to build `afw_media` and `libafw_render.so` (only needed
   once each, to produce the binaries)
 - `ffmpeg`/`ffprobe` on PATH for all media input (video and images)

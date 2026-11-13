@@ -27,17 +27,18 @@ MODULE_ORDER = [
 
 HEADER = """from __future__ import annotations
 
+# Keep in sync with afw/__init__.py.
+__version__ = "0.1.0-dev"
+
 import atexit
 import ctypes
 import io
 import math
 import os
-import random
 import re
 import select
 import shutil
 import signal
-import struct
 import subprocess
 import sys
 import termios
@@ -72,7 +73,7 @@ def bundle():
                 if len(parts) >= 2 and parts[1] in (
                     "dataclasses", "enum", "math", "os", "sys", "time", "threading",
                     "typing", "unicodedata", "shutil", "signal", "termios", "tty",
-                    "atexit", "re", "select", "io", "ctypes", "pathlib", "subprocess", "struct"
+                    "atexit", "re", "select", "io", "ctypes", "pathlib", "subprocess"
                 ):
                     continue
             lines.append(line)
@@ -83,6 +84,7 @@ def bundle():
 
     all_export = """
 __all__ = [
+    "__version__",
     "old", "modern", "is_old",
     "native_render_available",
     "Color", "Colors", "Style", "DEFAULT_STYLE",

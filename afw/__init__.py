@@ -1,3 +1,11 @@
+"""afw: terminal animation framework (package layout).
+
+Single-file users: builders/bundle.py merges these modules into afw.py;
+keep __version__ in sync with the version string in its HEADER.
+"""
+
+__version__ = "0.1.0-dev"
+
 from ._compat import old, modern, is_old
 from ._native import native_render_available
 from .color import Color, Colors
@@ -14,6 +22,7 @@ from .audio import AudioPlayer, Sound, Music
 from .app import App, FPSCounter
 
 __all__ = [
+    "__version__",
     "old", "modern", "is_old",
     "native_render_available",
     "Color", "Colors", "Style", "DEFAULT_STYLE",

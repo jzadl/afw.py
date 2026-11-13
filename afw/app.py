@@ -8,13 +8,17 @@ from .terminal import Terminal
 from .canvas import Canvas
 from .renderer import Renderer
 from ._input import InputManager, KeyEvent, MouseEvent, Key
-from .animation import AnimationManager, Tween, _DummyTarget, Ticker
+from .animation import AnimationManager, Tween, Ticker
 from .widgets import Scene
 from .style import Style
 from .color import Colors
 
 
 class FPSCounter:
+    """Smoothed frames-per-second readout: recomputes from the frame
+    count every 0.2s so the displayed value doesn't jitter frame to
+    frame. str(counter) gives one decimal place."""
+
     def __init__(self):
         self._last_time: float = 0.0
         self._frames: int = 0
@@ -41,6 +45,19 @@ class FPSCounter:
 
 
 class App:
+    """The main loop: owns the terminal (raw mode + alt screen), paces
+    frames to target_fps, dispatches input, and drives the scene.
+
+    Build the scene, register callbacks with the @app.on_* decorators
+    (or app.ticker() for periodic callbacks), then call run(). run()
+    blocks until app.stop() is called or Ctrl-C is pressed, and fully
+    restores the terminal on exit, so several App() instances can run
+    one after another in the same process.
+
+    Constructor: App(title="Terminal Animation", target_fps=60.0,
+    mouse=False, show_fps=False). target_fps must be a positive number.
+    """
+
     def __init__(
         self,
         title: str = "Terminal Animation",
@@ -49,9 +66,6 @@ class App:
         mouse: bool = False,
         show_fps: bool = False,
     ):
-        if isinstance(title, (int, float)):
-            target_fps = float(title)
-            title = "Terminal Animation"
         self.title = str(title)
         self.target_fps = float(target_fps) if target_fps and target_fps > 0 else 60.0
         self.mouse = mouse
@@ -126,15 +140,23 @@ class App:
             prev_time = time.perf_counter()
 
             while self.running:
+                # Pace to the frame deadline: sleep the bulk of the
+                # remaining wait, then spin the last sliver (<=1ms) so
+                # the frame starts on time instead of early. Sleeping a
+                # fixed fraction of the wait and proceeding unchecked
+                # used to run frames faster than target_fps.
+                deadline = prev_time + target_dt
+                while self.running:
+                    now = time.perf_counter()
+                    remaining = deadline - now
+                    if remaining <= 0:
+                        break
+                    if remaining > 0.001:
+                        time.sleep(remaining - 0.0005)
+                    else:
+                        time.sleep(0)
                 now = time.perf_counter()
                 dt = now - prev_time
-                if dt < target_dt:
-                    wait = target_dt - dt
-                    if wait > 0.001:
-                        time.sleep(wait * 0.8)
-                    time.sleep(0.0001)
-                    now = time.perf_counter()
-                    dt = now - prev_time
                 prev_time = now
                 self.elapsed_time += dt
                 self.frame_count += 1
